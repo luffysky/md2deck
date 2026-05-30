@@ -686,27 +686,16 @@ async function ensurePdf(){
   return null;
 }
 async function pdfToHTML(buf){
-  const base=await ensurePdf(); const lib=window.pdfjsLib;
-  if(base===null||!lib) return "<blockquote><p>PDF 函式庫載入失敗。已內建自架副本，若仍失敗請確認檔案 vendor/pdf/ 有一起部署，或網路是否正常。</p></blockquote>";
-  try{
-    if(lib.GlobalWorkerOptions) lib.GlobalWorkerOptions.workerSrc=base+"pdf.worker.min.js";
-    const pdf=await lib.getDocument({data:new Uint8Array(buf)}).promise;
-    const imgMode = $('#pdfImgTog') ? $('#pdfImgTog').checked : true;
-    if(imgMode){
-      // 圖像模式：每頁渲染成圖，完整保留版面與圖片
-      let html='<div class="pdf-pages">';
-      for(let p=1;p<=pdf.numPages;p++){
-        const page=await pdf.getPage(p);
-        const v1=page.getViewport({scale:1});
-        const scale=Math.min(2.2, 1500/v1.width);
-        const vp=page.getViewport({scale});
-        const c=document.createElement('canvas'); c.width=Math.ceil(vp.width); c.height=Math.ceil(vp.height);
-        await page.render({canvasContext:c.getContext('2d'), viewport:vp}).promise;
-        html+=`<figure class="pdf-page"><img src="${c.toDataURL('image/jpeg',0.85)}" alt="第 ${p} 頁" loading="lazy"><figcaption>第 ${p} / ${pdf.numPages} 頁</figcaption></figure>`;
-      }
-      return html+'</div>';
+  if(!window.pdfjsLib){
+    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs").catch(()=>{});
+    if(!window.pdfjsLib){ // fallback to legacy build
+      try{const m=await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs");window.pdfjsLib=m;}catch(e){}
     }
-    // 文字模式：可搜尋、輕量（但不含圖片）
+  }
+  const lib=window.pdfjsLib; if(!lib) return "<p>PDF 函式庫載入失敗。</p>";
+  try{
+    if(lib.GlobalWorkerOptions) lib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs";
+    const pdf=await lib.getDocument({data:buf}).promise;
     let html=""; let any=false;
     for(let p=1;p<=pdf.numPages;p++){
       const page=await pdf.getPage(p); const tc=await page.getTextContent();
@@ -936,18 +925,6 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);line-height:1
 .doc-body .att-meta{display:flex;flex-direction:column;min-width:0}
 .doc-body .att-name{font-weight:600;color:var(--tx);font-family:var(--mono);font-size:14px;word-break:break-all}
 .doc-body .att-size{font-size:12px;color:var(--tx3);margin-top:2px}
-.doc-body .slides{display:flex;flex-direction:column;gap:22px;margin:8px 0}
-.doc-body .slide-card{position:relative;border:1px solid var(--line2);border-radius:18px;padding:34px 38px;background:linear-gradient(155deg,color-mix(in srgb,var(--ac1) 8%,var(--code-bg)),var(--code-bg) 70%);box-shadow:0 16px 46px rgba(0,0,0,.26);overflow:hidden}
-.doc-body .slide-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:linear-gradient(var(--ac1),var(--ac2))}
-.doc-body .slide-num{position:absolute;top:16px;right:20px;font-size:11px;letter-spacing:.14em;color:var(--tx3);font-family:var(--mono)}
-.doc-body .slide-title{font-family:var(--serif);font-weight:800;font-size:25px;line-height:1.25;color:var(--tx);margin:2px 50px 16px 0}
-.doc-body .slide-card .slide-img{display:block;max-width:100%;border-radius:12px;margin:16px 0;border:1px solid var(--line2);box-shadow:0 8px 24px rgba(0,0,0,.2)}
-.doc-body .slide-card ul{margin:6px 0 0;padding-left:22px}
-.doc-body .slide-card li{margin:9px 0;color:var(--tx2);font-size:15.5px}
-.doc-body .pdf-pages{display:flex;flex-direction:column;gap:20px;margin:8px 0}
-.doc-body .pdf-page{margin:0}
-.doc-body .pdf-page img{width:100%;display:block;border-radius:12px;border:1px solid var(--line2);box-shadow:0 12px 34px rgba(0,0,0,.24)}
-.doc-body .pdf-page figcaption{text-align:center;font-size:12px;color:var(--tx3);margin-top:8px;font-family:var(--mono);letter-spacing:.08em}
 .doc-body .katex-display{overflow-x:auto;overflow-y:hidden;padding:6px 0}
 .dsearch{padding:14px 16px 6px;position:relative}
 .dsearch input{width:100%;padding:9px 12px 9px 32px;border-radius:10px;border:1px solid var(--line2);background:color-mix(in srgb,var(--ink) 60%,transparent);color:var(--tx);font-family:var(--sans);font-size:13.5px}
@@ -1277,7 +1254,7 @@ function saveSettings(){
   try{localStorage.setItem('md2deck',JSON.stringify({
     theme:activeTheme,brand:$('#brandIn').value,tag:$('#tagIn').value,
     mermaid:$('#mermaidTog').checked,toc:$('#tocTog').checked,math:$('#mathTog').checked,search:$('#searchTog').checked,
-    layout:$('#layoutSel').value,cover:$('#coverTog').checked,group:$('#groupTog').checked,copy:$('#copyTog').checked,prog:$('#progTog').checked,accent:customAccent,pdfImg:$('#pdfImgTog').checked
+    layout:$('#layoutSel').value,cover:$('#coverTog').checked,group:$('#groupTog').checked,copy:$('#copyTog').checked,prog:$('#progTog').checked
   }));}catch(e){}
 }
 function loadSettings(){
@@ -1294,8 +1271,6 @@ function loadSettings(){
     if('group' in s)$('#groupTog').checked=s.group;
     if('copy' in s)$('#copyTog').checked=s.copy;
     if('prog' in s)$('#progTog').checked=s.prog;
-    if(typeof s.accent==='string')customAccent=s.accent;
-    if('pdfImg' in s)$('#pdfImgTog').checked=s.pdfImg;
   }catch(e){}
 }
 document.querySelectorAll('.pv-devices button').forEach(b=>b.onclick=()=>{
