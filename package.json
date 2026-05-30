@@ -1,0 +1,11 @@
+{
+  "name": "md2deck",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "postinstall": "npm --prefix md2deck_next/md2deck-next install",
+    "dev": "npm --prefix md2deck_next/md2deck-next run dev",
+    "build": "npm --prefix md2deck_next/md2deck-next run build",
+    "start": "npm --prefix md2deck_next/md2deck-next run start"
+  }
+}
