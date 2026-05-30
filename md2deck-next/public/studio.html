@@ -887,10 +887,45 @@ async function buildDeck(){
     nav = `<div class="nav-group"><button class="nav-item" data-doc="${cid}"><span class="nav-icon">⌂</span><span class="nav-text"><span class="nav-title">封面</span></span></button></div>` + nav;
     ids.unshift(cid);
   }
+  const katexCSS = $('#mathTog').checked ? await getKatexInlineCSS() : "";
   return DECK(t,nav,sections,ids,$('#brandIn').value,$('#tagIn').value,{
-    math:$('#mathTog').checked,search:$('#searchTog').checked,
+    math:$('#mathTog').checked,katexCSS:katexCSS,search:$('#searchTog').checked,
     layout:$('#layoutSel').value,cover:wantCover,copy:$('#copyTog').checked,prog:$('#progTog').checked,logo:brandLogo,accent:customAccent,favicon:(brandFavicon||brandLogo||"")
   });
+}
+
+/* 在字型堆疊結尾的 generic family 前插入系統中文字型 → 輸出 deck 不靠 Google Fonts 也不跑版 */
+function sysFont(stack){
+  const SERIF='"Noto Serif TC","Songti TC","Source Han Serif TC","SimSun"';
+  const SANS='-apple-system,BlinkMacSystemFont,"PingFang TC","PingFang SC","Microsoft JhengHei","Microsoft YaHei","Noto Sans TC","Source Han Sans TC"';
+  const MONO='ui-monospace,SFMono-Regular,Menlo,Consolas';
+  return String(stack)
+    .replace(/\s*,\s*monospace\s*$/, ','+MONO+',monospace')
+    .replace(/\s*,\s*sans-serif\s*$/, ','+SANS+',sans-serif')
+    .replace(/\s*,\s*serif\s*$/, ','+SERIF+',serif');
+}
+/* KaTeX：產生 deck 時把 CSS 與 woff2 字型內嵌（math 才用到），失敗則回退 CDN。結果快取一次。 */
+let _katexCSS=null;
+async function getKatexInlineCSS(){
+  if(_katexCSS!==null) return _katexCSS;
+  const base="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/";
+  try{
+    let css=await (await fetch(base+"katex.min.css")).text();
+    const fonts=[...new Set([...css.matchAll(/url\(([^)]+?\.woff2)\)/g)].map(m=>m[1].replace(/["']/g,"")))];
+    for(const f of fonts){
+      try{
+        const b=await (await fetch(base+f.replace(/^\.?\//,""))).blob();
+        const d=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(b);});
+        css=css.split("url("+f+")").join("url("+d+")")
+               .split("url('"+f+"')").join("url("+d+")")
+               .split('url("'+f+'")').join("url("+d+")");
+      }catch(e){}
+    }
+    // 移除剩餘的 woff / ttf 來源，避免 deck 再連 CDN
+    css=css.replace(/\s*,\s*url\([^)]+?\.(?:woff|ttf)\)\s*format\(["'](?:woff|truetype)["']\)/g,"");
+    _katexCSS=css;
+  }catch(e){ _katexCSS=""; }
+  return _katexCSS;
 }
 
 /* ============ deck HTML 模板 ============ */
@@ -910,7 +945,7 @@ function DECK(t,nav,sections,ids,brand,tag,opts){
   const SURF_DARK="--ink:#0a1018;--panel:rgba(18,27,45,.62);--panel2:rgba(13,20,35,.84);--line:rgba(120,160,200,.14);--line2:rgba(120,160,200,.28);--tx:#e8eef7;--tx2:#aab8cc;--tx3:#6f8197;--code-bg:#0a1120;--bg:radial-gradient(1100px 640px at 10% -10%,color-mix(in srgb,var(--ac2) 16%,transparent),transparent 60%),linear-gradient(180deg,#070b14,#0a1020)";
   const SURF_LIGHT="--ink:#f4f7fb;--panel:rgba(255,255,255,.74);--panel2:rgba(255,255,255,.9);--line:rgba(40,80,120,.13);--line2:rgba(40,80,120,.24);--tx:#17202e;--tx2:#47586c;--tx3:#8a9bb0;--code-bg:#0f1830;--bg:radial-gradient(1000px 640px at 12% -10%,color-mix(in srgb,var(--ac2) 10%,transparent),transparent 60%),linear-gradient(180deg,#f6f9fc,#eef3f9)";
   const flipVars = t.light ? SURF_DARK : SURF_LIGHT;
-  const css=`:root{${t.vars}--disp:${t.disp};--serif:${t.serif};--sans:${t.sans};--mono:${t.mono};--sb:316px;--bg:${t.bg}}
+  const css=`:root{${t.vars}--disp:${sysFont(t.disp)};--serif:${sysFont(t.serif)};--sans:${sysFont(t.sans)};--mono:${sysFont(t.mono)};--sb:316px;--bg:${t.bg}}
 ${opts.accent?`:root{--ac1:${opts.accent};--ac2:${opts.accent};--ac3:${opts.accent}}`:''}
 html.flip{${flipVars}}
 *{box-sizing:border-box;margin:0;padding:0}html{scroll-behavior:smooth}
@@ -1140,9 +1175,7 @@ else{var ini=location.hash.slice(1);
   return `<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(brand)} — 閱讀台</title>
 <link rel="icon" href="${opts.favicon||"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='15' fill='%235fe3c7'/%3E%3Ctext x='32' y='45' font-size='38' text-anchor='middle' fill='%2306121a' font-family='serif' font-weight='700'%3E島%3C/text%3E%3C/svg%3E"}">
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?${FONT[activeTheme]}&display=swap" rel="stylesheet">
-${opts.math?'<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">':''}
+${opts.math?(opts.katexCSS?`<style>${opts.katexCSS}</style>`:'<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css" crossorigin="anonymous">'):''}
 <style>${css}</style></head><body><div class="bg"></div><div class="scrim" id="sc"></div><button id="totop" title="回頂端">↑</button><div id="lbox"><img alt=""></div>${opts.prog?'<div id="pbar"></div>':''}
 <aside class="sidebar" id="sb"><div class="brand"><div class="brand-mark">${opts.logo?`<img class="brand-glyph brand-glyph-img" src="${opts.logo}" alt="logo"/>`:`<div class="brand-glyph">島</div>`}
 <div><div class="brand-name">${esc(brand)}</div><div class="brand-tag">${esc(tag)}</div></div></div></div>
