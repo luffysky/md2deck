@@ -887,9 +887,10 @@ async function buildDeck(){
     nav = `<div class="nav-group"><button class="nav-item" data-doc="${cid}"><span class="nav-icon">⌂</span><span class="nav-text"><span class="nav-title">封面</span></span></button></div>` + nav;
     ids.unshift(cid);
   }
-  const katexCSS = $('#mathTog').checked ? await getKatexInlineCSS() : "";
+  // 預覽 / 開新分頁用 CDN 的 KaTeX CSS（線上即可、最快、不卡）；
+  // 下載時才把字型內嵌進檔案（見 download()）以達真離線。
   return DECK(t,nav,sections,ids,$('#brandIn').value,$('#tagIn').value,{
-    math:$('#mathTog').checked,katexCSS:katexCSS,search:$('#searchTog').checked,
+    math:$('#mathTog').checked,katexCSS:"",search:$('#searchTog').checked,
     layout:$('#layoutSel').value,cover:wantCover,copy:$('#copyTog').checked,prog:$('#progTog').checked,logo:brandLogo,accent:customAccent,favicon:(brandFavicon||brandLogo||"")
   });
 }
@@ -904,17 +905,26 @@ function sysFont(stack){
     .replace(/\s*,\s*sans-serif\s*$/, ','+SANS+',sans-serif')
     .replace(/\s*,\s*serif\s*$/, ','+SERIF+',serif');
 }
-/* KaTeX：產生 deck 時把 CSS 與 woff2 字型內嵌（math 才用到），失敗則回退 CDN。結果快取一次。 */
+/* 下載時用的 KaTeX CDN <link>，下載會把它換成內嵌 <style> */
+const KATEX_CDN_LINK='<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css" crossorigin="anonymous">';
+/* 帶逾時的 fetch，避免任何網路問題卡住 */
+function fetchT(url,ms,as){
+  return Promise.race([
+    fetch(url).then(r=>as==="blob"?r.blob():r.text()),
+    new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),ms||8000))
+  ]);
+}
+/* KaTeX：把 CSS 與 woff2 字型內嵌（僅下載時、math 才用到），失敗回傳 ""（保留 CDN）。快取一次。 */
 let _katexCSS=null;
 async function getKatexInlineCSS(){
   if(_katexCSS!==null) return _katexCSS;
   const base="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/";
   try{
-    let css=await (await fetch(base+"katex.min.css")).text();
+    let css=await fetchT(base+"katex.min.css",8000,"text");
     const fonts=[...new Set([...css.matchAll(/url\(([^)]+?\.woff2)\)/g)].map(m=>m[1].replace(/["']/g,"")))];
     for(const f of fonts){
       try{
-        const b=await (await fetch(base+f.replace(/^\.?\//,""))).blob();
+        const b=await fetchT(base+f.replace(/^\.?\//,""),8000,"blob");
         const d=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(b);});
         css=css.split("url("+f+")").join("url("+d+")")
                .split("url('"+f+"')").join("url("+d+")")
