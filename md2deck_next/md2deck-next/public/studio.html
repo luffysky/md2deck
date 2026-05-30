@@ -349,11 +349,11 @@ let activeTheme = "control";
 
 /* -------- 狀態 -------- */
 let docs = []; let uid = 0;
-const EXT_LANG = {ts:"typescript",tsx:"typescript",js:"javascript",jsx:"javascript",py:"python",json:"json",sql:"sql",css:"css",html:"xml",sh:"bash",bash:"bash",yml:"yaml",yaml:"yaml",go:"go",rs:"rust",java:"java",c:"c",cpp:"cpp",rb:"ruby",php:"php",kt:"kotlin",swift:"swift"};
+const EXT_LANG = {ts:"typescript",tsx:"typescript",js:"javascript",jsx:"javascript",mjs:"javascript",cjs:"javascript",py:"python",json:"json",sql:"sql",css:"css",scss:"scss",less:"less",html:"xml",xml:"xml",svg:"xml",vue:"xml",svelte:"xml",sh:"bash",bash:"bash",zsh:"bash",ps1:"powershell",bat:"dos",yml:"yaml",yaml:"yaml",toml:"ini",ini:"ini",conf:"ini",cfg:"ini",properties:"ini",env:"bash",dockerfile:"dockerfile",makefile:"makefile",mk:"makefile",gradle:"groovy",go:"go",rs:"rust",java:"java",c:"c",h:"c",cpp:"cpp",hpp:"cpp",cs:"csharp",rb:"ruby",php:"php",kt:"kotlin",swift:"swift",dart:"dart",scala:"scala",r:"r",lua:"lua",pl:"perl",ex:"elixir",exs:"elixir",clj:"clojure",hs:"haskell"};
 const AUDIO_EXT=["mp3","wav","ogg","oga","m4a","aac","flac","opus"];
 const VIDEO_EXT=["mp4","webm","mov","m4v","ogv","mkv"];
 const IMG_EXT=["png","apng","jpg","jpeg","gif","webp","svg","avif","bmp"];
-const TEXT_EXT=["txt","log","xml","yml","yaml","toml","ini","conf","cfg","env","properties","gitignore","dockerfile","makefile","gradle","csv2"];
+const TEXT_EXT=["txt","text","log","nfo","me","markdown~"];
 const kindOf = ext => ext==="md"||ext==="markdown" ? "md"
   : ext==="csv"||ext==="tsv" ? "csv"
   : ext==="json" ? "json"
@@ -541,6 +541,34 @@ function jsonToHTML(text){
   let pretty=text; try{pretty=JSON.stringify(JSON.parse(text),null,2);}catch(e){}
   return codeToHTML(pretty,"json");
 }
+/* 把跳脫後安全地把網址轉成連結 */
+function linkifyEsc(s){
+  return String(s).split(/(https?:\/\/[^\s<>"']+)/g)
+    .map((p,i)=> i%2 ? `<a href="${p.replace(/"/g,"%22")}" target="_blank" rel="noopener">${esc(p)}</a>` : esc(p)).join("");
+}
+/* 純文字 → 可讀排版：逐行解析，偵測標題、項目清單、段落，保留行內換行、網址成連結 */
+function textToHTML(text){
+  const src=String(text).replace(/\r\n?/g,"\n").replace(/\t/g,"    ");
+  const lines=src.split("\n");
+  const bulletRe=/^\s*([-*•–·]|\d+[.)、])\s+/;
+  let html="", para=[], list=null, listType="ul";
+  const flushPara=()=>{ if(para.length){ html+=`<p>${para.map(linkifyEsc).join("<br>")}</p>`; para=[]; } };
+  const flushList=()=>{ if(list){ html+=(listType==="ol"?`<ol>${list.join("")}</ol>`:`<ul>${list.join("")}</ul>`); list=null; } };
+  const isHeading=(t,next)=>{ t=t.trim(); if(!t) return false;
+    if(/[:：]$/.test(t)) return true;
+    if(t.length<=46 && !/[。.!?！？,，、;；]$/.test(t) && (next===undefined || !next.trim() || bulletRe.test(next))) return true;
+    return false; };
+  for(let i=0;i<lines.length;i++){
+    const line=lines[i].replace(/\s+$/,"");
+    if(!line.trim()){ flushPara(); flushList(); continue; }
+    if(bulletRe.test(line)){ flushPara(); const ordered=/^\s*\d+[.)、]/.test(line); if(!list){list=[];listType=ordered?"ol":"ul";} list.push(`<li>${linkifyEsc(line.replace(bulletRe,""))}</li>`); continue; }
+    flushList();
+    if(para.length===0 && isHeading(line, lines[i+1])){ const t=line.trim(); html+=`<h2 id="${slug(t)}">${linkifyEsc(t.replace(/[:：]\s*$/,""))}</h2>`; continue; }
+    para.push(line);
+  }
+  flushPara(); flushList();
+  return html||`<p>${linkifyEsc(text)}</p>`;
+}
 async function docxToHTML(buf){
   if(!window.mammoth){await loadScript("https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.7.0/mammoth.browser.min.js");}
   try{const r=await window.mammoth.convertToHtml({arrayBuffer:buf});
@@ -666,7 +694,7 @@ async function renderDoc(d, assets){
   else if(d.kind==="code"){ title=title||d.name; sub="原始碼"; body=codeToHTML(d.data,d.lang);}
   else if(d.kind==="csv"){ title=title||d.name; sub="表格資料"; body=csvToHTML(d.data);}
   else if(d.kind==="json"){ title=title||d.name; sub="JSON"; body=jsonToHTML(d.data);}
-  else if(d.kind==="txt"){ title=title||d.name; sub="純文字"; body=`<pre><code>${esc(d.data)}</code></pre>`;}
+  else if(d.kind==="txt"){ title=title||d.name; if(d.ext==="log"){ sub="記錄檔"; body=`<pre><code>${esc(d.data)}</code></pre>`; } else { sub="純文字"; body=textToHTML(d.data); } }
   else if(d.kind==="img"){ title=title||d.name; sub="圖片"; body=`<p><img src="${d.data}" alt="${esc(d.name)}" style="max-width:100%;border-radius:12px;border:1px solid var(--line2)"></p>`;}
   else if(d.kind==="docx"){ title=title||d.name.replace(/\.docx$/i,""); sub="Word 文件"; body=await docxToHTML(d.data);}
   else if(d.kind==="pptx"){ title=title||d.name.replace(/\.pptx$/i,""); sub="PowerPoint 簡報"; body=await pptxToHTML(d.data);}
@@ -801,6 +829,7 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);line-height:1
 .doc-body h1{font-size:30px;font-weight:900;margin:54px 0 18px;padding-bottom:14px;border-bottom:1px solid var(--line2)}
 .doc-body h1:first-child{margin-top:0}
 .doc-body h2{font-size:23px;font-weight:700;margin:44px 0 14px;display:flex;align-items:center;gap:12px}
+.doc-body h2::before{content:"";flex:none;width:4px;height:23px;border-radius:3px;background:linear-gradient(var(--ac1),var(--ac2))}
 .doc-body h2::before{content:"";width:8px;height:8px;flex:none;border-radius:2px;transform:rotate(45deg);background:linear-gradient(135deg,var(--ac1),var(--ac2))}
 .doc-body h3{font-size:18.5px;font-weight:700;margin:30px 0 10px;color:var(--ac3)}
 .doc-body h4{font-size:16px;font-weight:700;margin:22px 0 8px}
@@ -980,7 +1009,8 @@ function mergeMarkdown(){
       if(d.kind==="md") out+=d.data;
       else if(d.kind==="code") out+="```"+d.lang+"\n"+d.data+"\n```";
       else if(d.kind==="json") out+="```json\n"+d.data+"\n```";
-      else if(d.kind==="csv"||d.kind==="txt") out+="```\n"+d.data+"\n```";
+      else if(d.kind==="csv") out+="```\n"+d.data+"\n```";
+      else if(d.kind==="txt") out+=(d.ext==="log"?"```\n"+d.data+"\n```":d.data);
       else if(d.kind==="img") out+=`![${d.name}](${d.name})`;
       else out+="(略)";
     }
