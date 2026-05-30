@@ -29,3 +29,16 @@ npm run dev      # http://localhost:3000
 - 白標 / 自訂網域 / 閱讀分析（商業化 hook）。
 
 > 引擎本身是純前端、client-side；改成 Next 不是為了「轉得更好」，而是為了 **SEO + 帳號/金流/AI/託管等伺服器端擴充**。
+
+## 授權 License
+
+**Copyright (C) 2026 SnowRealm**
+
+本專案採用 **GNU Affero General Public License v3.0 (AGPL-3.0-only)**，完整條款見 [`LICENSE`](./LICENSE)。
+
+重點（非法律建議，僅摘要）：
+- 可自由使用、修改、散布。
+- **若你修改後拿來提供網路服務（SaaS），必須一併公開你修改後的原始碼。** 這是 AGPL 與一般 GPL 最大的差別，用來防止「改一改拿去當閉源 SaaS」。
+- 衍生作品必須同樣以 AGPL-3.0 授權。
+
+未來的付費後端（帳號、Z 幣、AI、託管、白標）將放在獨立的私有 repo，不受本授權影響。
