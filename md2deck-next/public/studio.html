@@ -1230,9 +1230,16 @@ async function refresh(){
   $('#pvload').classList.remove('show');
   stopPvTimer();
 }
-function download(){
+async function download(){
   if(!lastHTML)return;
-  const blob=new Blob([lastHTML],{type:"text/html;charset=utf-8"});
+  let html=lastHTML;
+  // 下載檔要能真離線：若有數學則把 KaTeX CSS+字型內嵌（換掉 CDN <link>），失敗保留 CDN
+  if($('#mathTog').checked && html.includes(KATEX_CDN_LINK)){
+    busy(true);
+    try{ const css=await getKatexInlineCSS(); if(css) html=html.replace(KATEX_CDN_LINK,'<style>'+css+'</style>'); }catch(e){}
+    busy(false);
+  }
+  const blob=new Blob([html],{type:"text/html;charset=utf-8"});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
   a.download=($('#brandIn').value||"deck").replace(/\s+/g,"_")+"_閱讀台.html";a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
