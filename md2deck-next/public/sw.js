@@ -1,5 +1,5 @@
 /* md2deck (Next) service worker — app shell + CDN runtime cache */
-const CACHE='md2deck-next-v1', CDN='md2deck-cdn-v1';
+const CACHE='md2deck-next-v2', CDN='md2deck-cdn-v2';
 const SHELL=['/','/studio','/studio.html','/manifest.webmanifest',
   '/icons/icon-192.png','/icons/icon-512.png','/icons/apple-touch-icon-180.png','/icons/favicon-32.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting()).catch(()=>self.skipWaiting()));});

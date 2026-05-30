@@ -26,13 +26,13 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Noto+Sans+TC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js" integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.9/purify.min.js" integrity="sha384-3HPB1XT51W3gGRxAmZ+qbZwRpRlFQL632y8x+adAqCr4Wp3TaWwCLSTAJJKbyWEK" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.min.js" integrity="sha384-6F4Ibv/ylL12O35KFWTeGTHuBKDz5L6yjKsgv3QHQ8s4NTqlDXq7kMlYXGs7MHFc" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous" referrerpolicy="no-referrer">
-<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js" integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.9/purify.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
 <style>
 :root{
   --ink:#080c16;--ink2:#0c1322;--panel:rgba(18,27,45,.66);--panel2:rgba(13,20,35,.82);
@@ -1209,13 +1209,27 @@ function setProg(done,total){
 let _pvTimer=null,_pvStart=0,_pvUrl=null;
 function startPvTimer(){ _pvStart=performance.now(); const tick=()=>{const el=$('#pvtime'); if(el) el.textContent='已轉換 '+((performance.now()-_pvStart)/1000).toFixed(1)+' 秒';}; tick(); stopPvTimer(); _pvTimer=setInterval(tick,100); }
 function stopPvTimer(){ if(_pvTimer){clearInterval(_pvTimer);_pvTimer=null;} }
+function previewError(msg){
+  // 把錯誤顯示在預覽區，不再靜默失敗
+  lastHTML="";
+  const em=$('#empty'); em.style.display="grid";
+  em.innerHTML='<div><div class="big">⚠️</div>'+esc(msg)+'</div>';
+  $('#pv').hidden=true; $('#pvload').classList.remove('show'); stopPvTimer();
+  renderList(); // 重新計算按鈕 disabled（lastHTML 已空）
+}
 async function refresh(){
   if(!docs.filter(d=>d.include).length){$('#empty').style.display="grid";$('#pv').hidden=true;$('#pvload').classList.remove('show');stopPvTimer();return;}
+  // 轉換引擎必須先就緒，否則預覽會靜默失敗
+  if(!window.marked||!window.DOMPurify||!window.hljs){
+    previewError("轉換引擎尚未載入完成（marked / DOMPurify / highlight.js）。請檢查網路或重新整理頁面後再試。");
+    return;
+  }
   $('#empty').style.display="none";
   setProg(0,0);
   $('#pvload').classList.add('show');
   startPvTimer();
   const t0=performance.now();
+  let ok=false;
   try{
     const html=await buildDeck();
     lastHTML=html;
@@ -1224,7 +1238,12 @@ async function refresh(){
     const old=_pvUrl; _pvUrl=url;
     const pv=$('#pv'); pv.removeAttribute('srcdoc'); pv.hidden=false; pv.src=url;
     if(old) setTimeout(()=>URL.revokeObjectURL(old),3000);
-  }catch(e){console.error(e);}
+    ok=true;
+  }catch(e){
+    console.error(e);
+    previewError("轉換時發生錯誤："+(e&&e.message?e.message:e)+"（請重新整理頁面再試）");
+    return;
+  }
   const wait=Math.max(0,360-(performance.now()-t0));   // 至少顯示一下「轉換中」讓人看得到
   if(wait) await new Promise(r=>setTimeout(r,wait));
   $('#pvload').classList.remove('show');
