@@ -221,7 +221,7 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);min-height:10
       <div class="drop" id="drop">
         <div class="ic">⬇</div>
         <div class="t">把檔案或資料夾拖進來</div>
-        <div class="s">Markdown / 程式碼 / Word / PPT / Excel / PDF / 圖片 / 影片 / 音樂 / .ipynb… 幾乎任何檔案<br>拖整個資料夾會自動依子資料夾分組</div>
+        <div class="s">Markdown / 程式碼 / Word / PPT / Excel / PDF / 圖片 / 影片 / 音樂 / .ipynb… 幾乎任何檔案<br>拖整個資料夾會自動依子資料夾分組<br>丟 <b>.zip</b> 壓縮檔會自動解壓縮（檔案多時用一個壓縮檔就好）</div>
         <div class="pick">
           <button class="minibtn" id="pickFiles">選擇檔案</button>
           <button class="minibtn" id="pickDir">選擇資料夾</button>
@@ -299,7 +299,7 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);min-height:10
 
     <div class="hint" id="formats">
       <b>能轉什麼？</b><br>
-      <span class="pill">Markdown</span><span class="pill">程式碼</span><span class="pill">CSV→表格</span><span class="pill">JSON</span><span class="pill">圖片</span><span class="pill">影片</span><span class="pill">音樂</span><span class="pill">Word</span><span class="pill">PPT</span><span class="pill">Excel</span><span class="pill">PDF</span><span class="pill">.ipynb</span><span class="pill">Mermaid</span><span class="pill">KaTeX</span><span class="pill">＋任何檔案</span>
+      <span class="pill">Markdown</span><span class="pill">程式碼</span><span class="pill">CSV→表格</span><span class="pill">JSON</span><span class="pill">圖片</span><span class="pill">影片</span><span class="pill">音樂</span><span class="pill">Word</span><span class="pill">PPT</span><span class="pill">Excel</span><span class="pill">PDF</span><span class="pill">.ipynb</span><span class="pill">Mermaid</span><span class="pill">KaTeX</span><span class="pill">ZIP 解壓</span><span class="pill">＋任何檔案</span>
       <br><br><b>Office 也能轉</b>：Word 取內文、PowerPoint 逐頁取文字、Excel 每張工作表變表格。影音與圖片會一起內嵌，其他不認得的檔做成可下載附件卡，等於什麼都能轉。
       <br><br><b>能輸出成</b>：<span class="pill">單檔 HTML</span><span class="pill">一鍵 PDF</span><span class="pill">EPUB 電子書</span><span class="pill">合併 Markdown</span><span class="pill">JSON</span>　閱讀台內含全文搜尋。
       <br><br>📲 可「加到主畫面」當 App 用，第一次開過之後可離線。<br>🔒 檔案完全不上傳，全部在你的瀏覽器裡轉。
@@ -400,7 +400,41 @@ const isTextKind = k => ["md","csv","json","txt","code"].includes(k);
 const isDataKind = k => ["img","audio","video","file"].includes(k);
 
 /* -------- 讀檔 -------- */
+const ZIP_EXT=["zip"];
+/* 解壓縮：把拖進來的 .zip 展開成一般檔案（保留資料夾結構→自動依資料夾分組），再走原本流程 */
+async function expandZips(arr){
+  if(!arr.some(f=>ZIP_EXT.includes((f.name.split(".").pop()||"").toLowerCase()))) return arr;
+  if(!window.JSZip){ await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js").catch(()=>{}); }
+  if(!window.JSZip) return arr;   // 函式庫載入失敗 → 當成一般附件處理
+  const out=[];
+  for(const f of arr){
+    if(!ZIP_EXT.includes((f.name.split(".").pop()||"").toLowerCase())){ out.push(f); continue; }
+    try{
+      const zip=await JSZip.loadAsync(await f.arrayBuffer());
+      const base=f.name.replace(/\.zip$/i,"");
+      for(const e of Object.values(zip.files)){
+        if(e.dir) continue;
+        const p=e.name;
+        if(/(^|\/)(__MACOSX\/|\.DS_Store$|Thumbs\.db$)/i.test(p)) continue;   // 略過系統垃圾檔
+        const blob=await e.async("blob");
+        const nf=new File([blob], p.split("/").pop(), {type:blob.type});
+        try{ Object.defineProperty(nf,'webkitRelativePath',{value:base+"/"+p}); }catch(_){}
+        out.push(nf);
+      }
+    }catch(err){ out.push(f); }   // 解壓失敗 → 保留原壓縮檔當附件
+  }
+  return out;
+}
 function addFiles(fileList){
+  const all=[...fileList];
+  if(all.some(f=>ZIP_EXT.includes((f.name.split(".").pop()||"").toLowerCase()))){
+    busy(true);
+    expandZips(all).then(ex=>{ busy(false); _addFiles(ex); }).catch(()=>{ busy(false); _addFiles(all); });
+    return;
+  }
+  _addFiles(all);
+}
+function _addFiles(fileList){
   const arr = [...fileList];
   let pending = arr.length; if(!pending) return; busy(true);
   arr.forEach(f=>{
