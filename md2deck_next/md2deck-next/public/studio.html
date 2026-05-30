@@ -676,16 +676,11 @@ async function pptxToHTML(buf){
 }
 
 async function pdfToHTML(buf){
-  if(!window.pdfjsLib){
-    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs").catch(()=>{});
-    if(!window.pdfjsLib){ // fallback to legacy build
-      try{const m=await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs");window.pdfjsLib=m;}catch(e){}
-    }
-  }
-  const lib=window.pdfjsLib; if(!lib) return "<p>PDF 函式庫載入失敗。</p>";
+  if(!window.pdfjsLib){ await loadScript("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js").catch(()=>{}); }
+  const lib=window.pdfjsLib; if(!lib) return "<blockquote><p>PDF 函式庫載入失敗。請確認網路正常、且 CDN（cdnjs.cloudflare.com）沒有被擋。</p></blockquote>";
   try{
-    if(lib.GlobalWorkerOptions) lib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs";
-    const pdf=await lib.getDocument({data:buf}).promise;
+    if(lib.GlobalWorkerOptions) lib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const pdf=await lib.getDocument({data:new Uint8Array(buf)}).promise;
     let html=""; let any=false;
     for(let p=1;p<=pdf.numPages;p++){
       const page=await pdf.getPage(p); const tc=await page.getTextContent();
