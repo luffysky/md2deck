@@ -68,7 +68,7 @@ export default function Home() {
       </section>
 
       <footer className="foot">
-        <p>{SITE_NAME} · 由 <a href="https://snowrealm.pet" rel="noopener">SnowRealm</a> 打造</p>
+        <p>{SITE_NAME} · 由 <a href="https://ai-island-web.snowrealm.pet" target="_blank" rel="noopener">SnowRealm</a> 打造</p>
       </footer>
 
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqLd) }} />
