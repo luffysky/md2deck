@@ -66,6 +66,11 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);min-height:10
 .btn.primary:hover{filter:brightness(1.08)}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 .layout{display:grid;grid-template-columns:430px 1fr;gap:0;height:calc(100vh - 79px)}
+.layout.collapsed{grid-template-columns:1fr}
+.layout.collapsed .panel{display:none}
+.pvtoggle{padding:6px 13px;border-radius:8px;border:1px solid var(--line2);background:rgba(120,170,210,.08);color:var(--tx2);cursor:pointer;font-size:12.5px;white-space:nowrap;font-family:var(--sans)}
+.pvtoggle:hover{color:#fff;border-color:var(--ice)}
+.layout.collapsed .pvtoggle{border-color:var(--ice);color:var(--ice)}
 .panel{overflow-y:auto;padding:26px 24px 60px;border-right:1px solid var(--line)}
 .panel::-webkit-scrollbar,.preview-shell::-webkit-scrollbar{width:9px}
 .panel::-webkit-scrollbar-thumb{background:var(--line2);border-radius:9px}
@@ -118,6 +123,9 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);min-height:10
 .field input[type=text]{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line2);background:rgba(8,12,22,.5);color:var(--tx);font-family:var(--sans);font-size:14px}
 .field select{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line2);background:rgba(8,12,22,.5);color:var(--tx);font-family:var(--sans);font-size:14px;cursor:pointer}
 .field select:focus{outline:0;border-color:var(--ice)}
+.logo-row{display:flex;align-items:center;gap:10px}
+.logo-prev{width:46px;height:46px;flex:none;border-radius:12px;display:grid;place-items:center;font-family:var(--disp);font-weight:700;font-size:22px;color:#06121a;background:linear-gradient(145deg,var(--ice),var(--sky));overflow:hidden}
+.logo-prev img{width:100%;height:100%;object-fit:cover}
 .field input:focus{outline:0;border-color:var(--ice)}
 .toggle{display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--tx2);cursor:pointer;padding:8px 0}
 .toggle input{width:42px;height:24px;appearance:none;background:rgba(120,170,210,.2);border-radius:20px;position:relative;cursor:pointer;transition:.2s;flex:none}
@@ -205,6 +213,14 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);min-height:10
       <div class="sec-label"><span class="n">3</span>設定</div>
       <div class="field"><label>左上品牌名</label><input type="text" id="brandIn" value="AI Island"></div>
       <div class="field"><label>品牌副標</label><input type="text" id="tagIn" value="SnowRealm · 交付閱讀台"></div>
+      <div class="field"><label>品牌圖示 Logo（可選，不傳就用預設「島」）</label>
+        <div class="logo-row">
+          <div class="logo-prev" id="logoPrev">島</div>
+          <input type="file" id="logoIn" accept="image/*" hidden>
+          <button class="minibtn" id="logoPick">上傳圖片</button>
+          <button class="minibtn" id="logoClear" style="display:none">移除</button>
+        </div>
+      </div>
       <label class="toggle"><input type="checkbox" id="mermaidTog" checked> 渲染 Mermaid 流程圖（```mermaid 區塊）</label>
       <label class="toggle"><input type="checkbox" id="mathTog" checked> 渲染數學公式（KaTeX，<code>$…$</code>）</label>
       <label class="toggle"><input type="checkbox" id="tocTog" checked> 每頁右側自動目錄</label>
@@ -237,7 +253,10 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);min-height:10
   <!-- ============ PREVIEW ============ -->
   <section class="preview-shell">
     <div class="pv-bar">
-      <span class="lbl">即時預覽</span>
+      <div style="display:flex;align-items:center;gap:12px;min-width:0">
+        <button class="pvtoggle" id="collapseBtn" title="收合左側面板，全畫面看預覽">◧ 收合面板</button>
+        <span class="lbl">即時預覽</span>
+      </div>
       <div class="pv-devices">
         <button data-dev="desktop" class="active">💻 桌機</button>
         <button data-dev="mobile">📱 手機</button>
@@ -655,7 +674,7 @@ async function buildDeck(){
   if(wantCover){
     const cid="cover";
     const cover=`<section class="doc" id="doc-${cid}" data-title="封面" hidden>
-      <div class="cover"><div class="cover-glyph">島</div>
+      <div class="cover">${brandLogo?`<img class="cover-glyph cover-glyph-img" src="${brandLogo}" alt="logo"/>`:`<div class="cover-glyph">島</div>`}
       <h1 class="cover-title">${esc($('#brandIn').value)}</h1>
       <p class="cover-tag">${esc($('#tagIn').value)}　·　${new Date().toISOString().slice(0,10)}</p>
       <div class="cover-index">${indexCards.join("")}</div></div></section>`;
@@ -665,7 +684,7 @@ async function buildDeck(){
   }
   return DECK(t,nav,sections,ids,$('#brandIn').value,$('#tagIn').value,{
     math:$('#mathTog').checked,search:$('#searchTog').checked,
-    layout:$('#layoutSel').value,cover:wantCover,copy:$('#copyTog').checked,prog:$('#progTog').checked
+    layout:$('#layoutSel').value,cover:wantCover,copy:$('#copyTog').checked,prog:$('#progTog').checked,logo:brandLogo
   });
 }
 
@@ -691,6 +710,7 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);line-height:1
 .brand{padding:30px 26px 22px;border-bottom:1px solid var(--line)}
 .brand-mark{display:flex;align-items:center;gap:13px}
 .brand-glyph{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;font-size:20px;color:${t.light?'#fff':'#06121a'};font-weight:700;background:linear-gradient(145deg,var(--ac1),var(--ac2));box-shadow:0 6px 22px rgba(0,0,0,.2),inset 0 1px 0 rgba(255,255,255,.4)}
+.brand-glyph-img{background:none!important;box-shadow:0 6px 22px rgba(0,0,0,.2);object-fit:cover}
 .brand-name{font-family:var(--disp);font-weight:900;font-size:20px;letter-spacing:.03em;line-height:1.1}
 .brand-tag{font-size:11px;color:var(--tx3);letter-spacing:.2em;text-transform:uppercase;margin-top:5px}
 .nav{flex:1;overflow-y:auto;padding:18px 16px 30px}
@@ -780,6 +800,7 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);line-height:1
 .doc.scrollsec{margin-bottom:30px;padding-bottom:30px;border-bottom:1px solid var(--line)}
 .cover{min-height:62vh;display:flex;flex-direction:column;justify-content:center;padding:30px 0 50px;animation:rise .6s cubic-bezier(.2,.7,.2,1)}
 .cover-glyph{width:64px;height:64px;border-radius:18px;display:grid;place-items:center;font-size:32px;font-weight:700;color:${t.light?'#fff':'#06121a'};font-family:var(--serif);background:linear-gradient(145deg,var(--ac1),var(--ac2));box-shadow:0 10px 30px rgba(0,0,0,.25);margin-bottom:26px}
+.cover-glyph-img{background:none!important;object-fit:cover}
 .cover-title{font-family:var(--disp);font-weight:900;font-size:clamp(38px,6vw,68px);line-height:1.08;color:var(--tx)}
 .cover-tag{margin-top:14px;font-size:16px;color:var(--tx2);font-weight:300}
 .cover-index{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:38px}
@@ -834,7 +855,7 @@ else{var ini=location.hash.slice(1);show(O.includes(ini)?ini:O[0]);}`;
 <link href="https://fonts.googleapis.com/css2?${FONT[activeTheme]}&display=swap" rel="stylesheet">
 ${opts.math?'<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">':''}
 <style>${css}</style></head><body><div class="bg"></div><div class="scrim" id="sc"></div>${opts.prog?'<div id="pbar"></div>':''}
-<aside class="sidebar" id="sb"><div class="brand"><div class="brand-mark"><div class="brand-glyph">島</div>
+<aside class="sidebar" id="sb"><div class="brand"><div class="brand-mark">${opts.logo?`<img class="brand-glyph brand-glyph-img" src="${opts.logo}" alt="logo"/>`:`<div class="brand-glyph">島</div>`}
 <div><div class="brand-name">${esc(brand)}</div><div class="brand-tag">${esc(tag)}</div></div></div></div>
 ${opts.search?'<div class="dsearch"><span class="si">⌕</span><input id="sq" type="search" placeholder="搜尋全部文件…" autocomplete="off"><div class="dresults" id="sres"></div></div>':''}
 <nav class="nav">${nav}</nav><div class="sidebar-foot"><span>md2deck</span><span>${new Date().toISOString().slice(0,10)}</span></div></aside>
@@ -986,7 +1007,29 @@ $('#pickDir').onclick=()=>$('#dirInput').click();
 $('#fileInput').onchange=e=>addFiles(e.target.files);
 $('#dirInput').onchange=e=>addFiles(e.target.files);
 $('#refreshBtn').onclick=refresh;
+$('#collapseBtn').onclick=()=>{
+  const c=document.querySelector('.layout').classList.toggle('collapsed');
+  $('#collapseBtn').innerHTML = c ? '▣ 展開面板' : '◧ 收合面板';
+};
 $('#downloadBtn').onclick=download;
+
+/* 品牌 Logo 上傳 */
+let brandLogo="";
+function applyLogoPreview(){
+  const pv=$('#logoPrev');
+  if(brandLogo){ pv.innerHTML='<img src="'+brandLogo+'" alt="logo">'; $('#logoClear').style.display=""; }
+  else { pv.textContent="島"; $('#logoClear').style.display="none"; }
+}
+$('#logoPick').onclick=()=>$('#logoIn').click();
+$('#logoIn').onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=ev=>{ brandLogo=ev.target.result; applyLogoPreview(); saveLogo(); refresh(); };
+  r.readAsDataURL(f);
+};
+$('#logoClear').onclick=()=>{ brandLogo=""; $('#logoIn').value=""; applyLogoPreview(); saveLogo(); refresh(); };
+function saveLogo(){ try{ if(brandLogo) localStorage.setItem('md2deck_logo',brandLogo); else localStorage.removeItem('md2deck_logo'); }catch(e){} }
+function loadLogo(){ try{ const l=localStorage.getItem('md2deck_logo'); if(l){ brandLogo=l; } }catch(e){} applyLogoPreview(); }
 $('#openTabBtn').onclick=openTab;
 $('#pdfBtn').onclick=exportPDF;
 $('#mergeMdBtn').onclick=mergeMarkdown;
@@ -1026,6 +1069,7 @@ document.querySelectorAll('.pv-devices button').forEach(b=>b.onclick=()=>{
 
 try{ if(window.mermaid) mermaid.initialize({startOnLoad:false,theme:'dark',securityLevel:'loose'}); }catch(e){}
 loadSettings();
+loadLogo();
 renderThemes();
 if('serviceWorker' in navigator && location.protocol.startsWith('http')){
   window.addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{});});
