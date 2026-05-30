@@ -163,6 +163,13 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);min-height:10
 .hint b{color:var(--aurora)}
 .pill{display:inline-block;font-size:11px;padding:2px 9px;border-radius:20px;background:rgba(95,227,199,.12);color:var(--ice);border:1px solid var(--line2);margin:2px}
 .busy{position:fixed;inset:0;display:none;place-items:center;background:rgba(6,9,16,.7);z-index:50;backdrop-filter:blur(3px)}
+.dropmask{position:fixed;inset:0;z-index:60;display:none;place-items:center;background:rgba(6,11,22,.82);backdrop-filter:blur(6px)}
+.dropmask.show{display:grid}
+.dropmask-box{border:2.5px dashed var(--ice);border-radius:24px;padding:54px 70px;text-align:center;background:rgba(95,227,199,.06)}
+.dropmask-ic{font-size:46px;color:var(--ice);animation:dmbounce 1s infinite ease-in-out}
+.dropmask-t{font-size:22px;font-weight:700;color:#fff;margin-top:10px}
+.dropmask-s{font-size:13px;color:var(--tx2);margin-top:6px}
+@keyframes dmbounce{0%,100%{transform:translateY(0)}50%{transform:translateY(8px)}}
 .busy.show{display:grid}
 .spin{width:44px;height:44px;border:3px solid rgba(95,227,199,.25);border-top-color:var(--ice);border-radius:50%;animation:sp .8s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -173,6 +180,7 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);min-height:10
 <body>
 <div class="bg"></div>
 <div class="busy" id="busy"><div class="spin"></div></div>
+<div class="dropmask" id="dropmask"><div class="dropmask-box"><div class="dropmask-ic">⬇</div><div class="dropmask-t">放開即可加入檔案</div><div class="dropmask-s">可以丟到畫面任何地方，包含右邊預覽區</div></div></div>
 <div id="__stage" style="position:absolute;left:-99999px;top:0;width:760px"></div>
 
 <div class="topbar">
@@ -284,7 +292,7 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);min-height:10
     </div>
     <div class="pv-frame-wrap" id="pvwrap">
       <div class="empty" id="empty"><div><div class="big">🏝️</div>放入檔案後，這裡會即時預覽轉出來的樣子</div></div>
-      <div class="pvload" id="pvload"><div class="spin"></div><div><div class="t">轉換中… 請稍後</div><div class="s">正在解析檔案並產生預覽（影音／PDF／Office 檔較大會多等一下）</div></div><div class="pvbar indet" id="pvbar"><div class="pvbar-fill" id="pvbarfill"></div></div><div class="pvcount" id="pvcount">準備中…</div></div>
+      <div class="pvload" id="pvload"><div class="spin"></div><div><div class="t">轉換中… 請稍後</div><div class="s" id="pvtime">已轉換 0.0 秒</div></div><div class="pvbar indet" id="pvbar"><div class="pvbar-fill" id="pvbarfill"></div></div><div class="pvcount" id="pvcount">準備中…</div></div>
       <iframe id="pv" hidden></iframe>
     </div>
   </section>
@@ -384,7 +392,7 @@ function addFiles(fileList){
     else if(isDataKind(kind)) reader.readAsDataURL(f);
     else reader.readAsText(f);
   });
-  function finish(){ linkAssets(); renderList(); refresh(); busy(false); }
+  function finish(){ busy(false); linkAssets(); renderList(); refresh(); }
 }
 const stripPrefix = s => s.replace(/^\d{1,3}[_\-.\s]+/,"");
 const normPath = s => String(s).replace(/^\.?\//,"").replace(/^\//,"").toLowerCase().trim();
@@ -923,12 +931,15 @@ function setProg(done,total){
   fill.style.width=pct+"%";
   cnt.textContent="處理中 "+done+" / "+total+"　("+pct+"%)";
 }
+let _pvTimer=null,_pvStart=0;
+function startPvTimer(){ _pvStart=performance.now(); const tick=()=>{const el=$('#pvtime'); if(el) el.textContent='已轉換 '+((performance.now()-_pvStart)/1000).toFixed(1)+' 秒';}; tick(); stopPvTimer(); _pvTimer=setInterval(tick,100); }
+function stopPvTimer(){ if(_pvTimer){clearInterval(_pvTimer);_pvTimer=null;} }
 async function refresh(){
-  if(!docs.filter(d=>d.include).length){$('#empty').style.display="grid";$('#pv').hidden=true;$('#pvload').classList.remove('show');return;}
-  $('#empty').style.display="none";          // 立刻收掉「放入檔案後…」空狀態
+  if(!docs.filter(d=>d.include).length){$('#empty').style.display="grid";$('#pv').hidden=true;$('#pvload').classList.remove('show');stopPvTimer();return;}
+  $('#empty').style.display="none";          // 立刻收掉空狀態
   setProg(0,0);                               // 進度條歸零（流動動畫）
-  $('#pvload').classList.add('show');        // 立刻顯示「轉換中…請稍後」
-  busy(true);
+  $('#pvload').classList.add('show');        // 預覽區內顯示「轉換中…」
+  startPvTimer();                             // 顯示實際轉換秒數
   try{
     const html=await buildDeck();
     lastHTML=html;
@@ -936,7 +947,7 @@ async function refresh(){
     $('#pv').srcdoc=html;
   }catch(e){console.error(e);}
   $('#pvload').classList.remove('show');
-  busy(false);
+  stopPvTimer();
 }
 function download(){
   if(!lastHTML)return;
@@ -1033,16 +1044,26 @@ async function exportJSON(){
 
 /* -------- 事件 -------- */
 const drop=$('#drop');
-['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over');}));
-['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over');}));
-drop.addEventListener('drop',async e=>{
+function handleDrop(e){
   const items=e.dataTransfer.items;
   if(items && items[0] && items[0].webkitGetAsEntry){
-    const files=[]; const ents=[...items].map(i=>i.webkitGetAsEntry()).filter(Boolean);
-    busy(true); for(const ent of ents) await walkEntry(ent,files); busy(false);
-    addFiles(files);
-  } else addFiles(e.dataTransfer.files);
-});
+    const ents=[...items].map(i=>i.webkitGetAsEntry()).filter(Boolean);
+    if(ents.length){ (async()=>{ const files=[]; busy(true); for(const ent of ents) await walkEntry(ent,files); busy(false); addFiles(files); })(); return; }
+  }
+  if(e.dataTransfer.files && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+}
+// 拖放區視覺高亮
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over');}));
+// 全視窗拖放（含右邊預覽區）— 只在拖「檔案」時觸發，不干擾清單拖曳排序
+const dmask=$('#dropmask'); let _dragDepth=0;
+const isFileDrag=e=>{try{return [...(e.dataTransfer.types||[])].includes('Files');}catch(_){return false;}};
+const hideMask=()=>{_dragDepth=0;dmask.classList.remove('show');};
+window.addEventListener('dragenter',e=>{ if(!isFileDrag(e))return; e.preventDefault(); _dragDepth++; dmask.classList.add('show'); });
+window.addEventListener('dragover', e=>{ if(!isFileDrag(e))return; e.preventDefault(); });
+window.addEventListener('dragleave',()=>{ if(_dragDepth===0)return; _dragDepth--; if(_dragDepth<=0) hideMask(); });
+window.addEventListener('dragend',  hideMask);
+window.addEventListener('drop',     e=>{ const f=isFileDrag(e); hideMask(); if(!f)return; e.preventDefault(); handleDrop(e); });
 function walkEntry(entry,out,path=""){
   return new Promise(res=>{
     if(entry.isFile){entry.file(f=>{try{Object.defineProperty(f,'webkitRelativePath',{value:path+f.name});}catch(e){}out.push(f);res();});}
