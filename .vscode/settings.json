@@ -1,0 +1,7 @@
+{
+  "//": "LICENSE 是 AGPL-3.0 法律條文，必須逐字保留，不對它做 markdown lint",
+  "markdownlint.ignore": [
+    "LICENSE",
+    "**/LICENSE"
+  ]
+}
