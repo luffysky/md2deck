@@ -7,3 +7,9 @@ build/
 .env.*
 *.log
 .DS_Store
+
+# 本地範例 / 測試輸入，不上傳
+ex_nooutput/
+_mtest/
+_*.txt
+CLAUDE.md

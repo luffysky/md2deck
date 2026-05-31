@@ -293,6 +293,14 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);min-height:10
       </div>
       <label class="toggle"><input type="checkbox" id="coverTog"> 產生封面頁（標題 + 文件索引）</label>
       <label class="toggle"><input type="checkbox" id="groupTog" checked> 依資料夾分組（關閉＝攤平成一組）</label>
+      <div class="field"><label>長文拆節點　<span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--tx3)">把長檔依標題切成側邊欄多個節點（任何含標題的檔都適用）</span></label>
+        <select id="splitSel">
+          <option value="0">不拆（每個檔一個節點）</option>
+          <option value="h1"># 第一層（每個 # 一個節點）</option>
+          <option value="h2">## 到第二層（# 與 ## 都成節點）</option>
+          <option value="h3">### 到第三層（#／##／### 都成節點）</option>
+        </select>
+      </div>
       <label class="toggle"><input type="checkbox" id="copyTog" checked> 程式碼區塊加「複製」鈕</label>
       <label class="toggle"><input type="checkbox" id="progTog" checked> 頂部閱讀進度條</label>
     </div>
@@ -642,16 +650,23 @@ function textToHTML(text){
   let html="", para=[], list=null, listType="ul";
   const flushPara=()=>{ if(para.length){ html+=`<p>${para.map(linkifyEsc).join("<br>")}</p>`; para=[]; } };
   const flushList=()=>{ if(list){ html+=(listType==="ol"?`<ol>${list.join("")}</ol>`:`<ul>${list.join("")}</ul>`); list=null; } };
-  const isHeading=(t,next)=>{ t=t.trim(); if(!t) return false;
-    if(/[:：]$/.test(t)) return true;
-    if(t.length<=46 && !/[。.!?！？,，、;；]$/.test(t) && (next===undefined || !next.trim() || bulletRe.test(next))) return true;
-    return false; };
+  // 結構訊號法：只認明顯像標題的格式（底線式 / 多層編號 / 章節 / 全大寫），避免把一般短句誤判成標題
+  const headingLevel=(t,next)=>{ t=(t||"").trim(); if(!t) return 0;
+    if(next!==undefined){ const n=next.trim(); if(/^={3,}$/.test(n)) return 1; if(/^-{3,}$/.test(n)) return 2; }
+    if(t.length>60) return 0;
+    let m=/^(\d+(?:\.\d+)+)\s+\S/.exec(t); if(m) return Math.min(3,m[1].split(".").length);
+    if(/^第[一二三四五六七八九十百零\d]+章/.test(t)) return 1;
+    if(/^第[一二三四五六七八九十百零\d]+[節节]/.test(t)) return 2;
+    if(/^(chapter|part)\s+(\d+|[ivxlcdm]+)\b/i.test(t)) return 1;
+    if(/^[（(]?[一二三四五六七八九十]+[）)、]/.test(t)) return 2;
+    if(/^[A-Z0-9][A-Z0-9 \-_/&]{2,}$/.test(t)&&/[A-Z]/.test(t)) return 2;
+    return 0; };
   for(let i=0;i<lines.length;i++){
     const line=lines[i].replace(/\s+$/,"");
     if(!line.trim()){ flushPara(); flushList(); continue; }
     if(bulletRe.test(line)){ flushPara(); const ordered=/^\s*\d+[.)、]/.test(line); if(!list){list=[];listType=ordered?"ol":"ul";} list.push(`<li>${linkifyEsc(line.replace(bulletRe,""))}</li>`); continue; }
     flushList();
-    if(para.length===0 && isHeading(line, lines[i+1])){ const t=line.trim(); html+=`<h2 id="${slug(t)}">${linkifyEsc(t.replace(/[:：]\s*$/,""))}</h2>`; continue; }
+    if(para.length===0){ const lv=headingLevel(line, lines[i+1]); if(lv){ const t=line.trim(); const n=(lines[i+1]||"").trim(); if(/^={3,}$/.test(n)||/^-{3,}$/.test(n)) i++; html+=`<h${lv} id="${slug(t)}">${linkifyEsc(t)}</h${lv}>`; continue; } }
     para.push(line);
   }
   flushPara(); flushList();
@@ -819,6 +834,33 @@ function firstSub(text){
   return "";
 }
 
+/* 長文拆節點：把已算繪的 body HTML 依標題（≤depth）切成多段（任何含 h1~h3 的檔都適用） */
+const SPLIT_MAP={"0":0,"h1":1,"h2":2,"h3":3};
+function splitDoc(bodyHTML, depth){
+  const box=document.createElement('div'); box.innerHTML=bodyHTML;
+  const parts=[]; let cur=null;
+  const flush=()=>{ if(cur){ const d=document.createElement('div'); cur.nodes.forEach(n=>d.appendChild(n)); cur.body=d.innerHTML; delete cur.nodes; parts.push(cur); } };
+  [...box.childNodes].forEach(node=>{
+    let lv=0;
+    if(node.nodeType===1){ const m=/^H([1-6])$/.exec(node.tagName); if(m && +m[1]<=depth) lv=+m[1]; }
+    if(lv>0){ flush(); cur={level:lv,title:(node.textContent||"").trim(),body:"",nodes:[node]}; }
+    else { if(!cur) cur={level:0,title:"",body:"",nodes:[]}; cur.nodes.push(node); }
+  });
+  flush();
+  return parts;
+}
+/* 把扁平的段落（含 level）依標題層級組成樹 */
+function partsToTree(parts){
+  const root=[],stack=[];
+  parts.forEach(p=>{
+    const node={level:p.level,title:p.title,body:p.body,children:[]};
+    while(stack.length&&stack[stack.length-1].level>=p.level) stack.pop();
+    (stack.length?stack[stack.length-1].children:root).push(node);
+    stack.push(node);
+  });
+  return root;
+}
+
 /* ============ 組 deck ============ */
 async function renderDoc(d, assets){
   let title=d.title||"", sub="", body="";
@@ -855,25 +897,73 @@ async function buildDeck(){
   let nav="",sections="",ids=[],gi=0;
   let _pd=0; const _pt=inc.length; setProg(0,_pt);
   const indexCards=[]; // 給封面用
-  for(const g of order){
-    let links="";const icon=ICONS[gi++%ICONS.length];
-    for(const d of groups[g]){
-      const r=await renderDoc(d, assets); const did="d"+ids.length; ids.push(did);
-      _pd++; setProg(_pd,_pt);
-      const toc=$('#tocTog').checked?buildTOC(r.body):"";
-      const _txt=String(r.body).replace(/<[^>]+>/g," ");
-      const _cjk=(_txt.match(/[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/g)||[]).length;
-      const _en=(_txt.match(/[A-Za-z0-9]+/g)||[]).length;
-      const _units=_cjk+_en, _min=Math.max(1,Math.round(_units/300));
-      const meta=_units>=15?`<div class="doc-meta">📖 約 ${_units.toLocaleString()} 字　·　${_min} 分鐘閱讀</div>`:"";
-      sections+=`<section class="doc" id="doc-${did}" data-title="${esc(r.title)}" hidden>
-        <header class="doc-head"><div class="doc-eyebrow">${esc(g||r.sub||"文件")}</div>
-        <h1 class="doc-title">${esc(r.title)}</h1><p class="doc-sub">${esc(r.sub)}</p>${meta}</header>
-        <div class="doc-grid"><article class="doc-body">${r.body}</article>${toc}</div></section>`;
-      links+=`<button class="nav-item" data-doc="${did}"><span class="nav-icon">${icon}</span><span class="nav-text"><span class="nav-title">${esc(r.title)}</span></span></button>`;
-      indexCards.push(`<button class="cover-card" data-doc="${did}"><span class="cc-g">${esc(g||"文件")}</span><span class="cc-t">${esc(r.title)}</span></button>`);
+  const splitDepth = SPLIT_MAP[$('#splitSel')?$('#splitSel').value:"0"]||0;
+  // 產生一頁 section（單檔節點與拆解節點共用）
+  const pageSection=(did,title,group,sub,body)=>{
+    const _txt=String(body).replace(/<[^>]+>/g," ");
+    const _cjk=(_txt.match(/[㐀-鿿぀-ヿ가-힯]/g)||[]).length;
+    const _en=(_txt.match(/[A-Za-z0-9]+/g)||[]).length;
+    const _units=_cjk+_en,_min=Math.max(1,Math.round(_units/300));
+    const meta=_units>=15?`<div class="doc-meta">📖 約 ${_units.toLocaleString()} 字　·　${_min} 分鐘閱讀</div>`:"";
+    const toc=$('#tocTog').checked?buildTOC(body):"";
+    return `<section class="doc" id="doc-${did}" data-title="${esc(title)}" hidden><header class="doc-head"><div class="doc-eyebrow">${esc(group||sub||"文件")}</div><h1 class="doc-title">${esc(title)}</h1><p class="doc-sub">${esc(sub)}</p>${meta}</header><div class="doc-grid"><article class="doc-body">${body}</article>${toc}</div></section>`;
+  };
+  const coverCard=(did,group,title)=>`<button class="cover-card" data-doc="${did}"><span class="cc-g">${esc(group||"文件")}</span><span class="cc-t">${esc(title)}</span></button>`;
+  if(splitDepth>0){
+    // 遞迴把標題樹輸出成巢狀 nav + 多頁 sections
+    const emit=(nodes,fileTitle,group,path)=>{
+      let nv="",sc="";
+      for(const node of nodes){
+        const did="d"+ids.length; ids.push(did);
+        const sub=path.length?path.join(" › "):fileTitle;
+        sc+=pageSection(did,node.title||fileTitle,group,sub,node.body);
+        const hasK=node.children&&node.children.length;
+        nv+=`<div class="nav-branch">`;
+        nv+=`<button class="nav-item nav-tree-item" data-doc="${did}">`+(hasK?'<span class="nav-tw">▸</span>':'<span class="nav-tw nav-tw-sp">▸</span>')+`<span class="nav-title">${esc(node.title||fileTitle)}</span></button>`;
+        if(hasK){ const r=emit(node.children,fileTitle,group,path.concat(node.title||fileTitle)); nv+=`<div class="nav-children">`+r.nv+`</div>`; sc+=r.sc; }
+        nv+=`</div>`;
+      }
+      return {nv,sc};
+    };
+    for(const g of order){
+      let inner="";const icon=ICONS[gi++%ICONS.length];
+      for(const d of groups[g]){
+        const r=await renderDoc(d, assets);
+        _pd++; setProg(_pd,_pt);
+        const fileTitle=r.title;
+        let parts=splitDoc(r.body, splitDepth);
+        if(parts.length>1 && parts[0].level===0){ parts[1].body=parts[0].body+parts[1].body; parts=parts.slice(1); }
+        const headParts=parts.filter(p=>p.level>0);
+        if(headParts.length<=1){
+          // 沒有可拆的標題 → 維持單一節點
+          const did="d"+ids.length; ids.push(did);
+          sections+=pageSection(did,fileTitle,g,r.sub,r.body);
+          inner+=`<button class="nav-item" data-doc="${did}"><span class="nav-icon">${icon}</span><span class="nav-text"><span class="nav-title">${esc(fileTitle)}</span></span></button>`;
+          indexCards.push(coverCard(did,g,fileTitle));
+          continue;
+        }
+        const tree=partsToTree(headParts);
+        const firstId="d"+ids.length;          // 檔節點 → 第一個子節點
+        const r2=emit(tree,fileTitle,g,[]);
+        sections+=r2.sc;
+        inner+=`<div class="nav-branch nav-file"><button class="nav-item nav-tree-item nav-file-head" data-doc="${firstId}"><span class="nav-tw">▸</span><span class="nav-title">${esc(fileTitle)}</span></button><div class="nav-children">${r2.nv}</div></div>`;
+        indexCards.push(coverCard(firstId,g,fileTitle));
+      }
+      if(g) nav+=`<div class="nav-branch nav-grp"><button class="nav-row nav-grphead"><span class="nav-tw">▸</span><span class="nav-rt">${esc(g)}</span></button><div class="nav-children">${inner}</div></div>`;
+      else nav+=`<div class="nav-group">${inner}</div>`;
     }
-    nav+=`<div class="nav-group">${g?`<div class="nav-grouplabel">${esc(g)}</div>`:""}${links}</div>`;
+  }else{
+    for(const g of order){
+      let links="";const icon=ICONS[gi++%ICONS.length];
+      for(const d of groups[g]){
+        const r=await renderDoc(d, assets); const did="d"+ids.length; ids.push(did);
+        _pd++; setProg(_pd,_pt);
+        sections+=pageSection(did,r.title,g,r.sub,r.body);
+        links+=`<button class="nav-item" data-doc="${did}"><span class="nav-icon">${icon}</span><span class="nav-text"><span class="nav-title">${esc(r.title)}</span></span></button>`;
+        indexCards.push(coverCard(did,g,r.title));
+      }
+      nav+=`<div class="nav-group">${g?`<div class="nav-grouplabel">${esc(g)}</div>`:""}${links}</div>`;
+    }
   }
   // 封面頁（放最前面）
   if(wantCover){
@@ -976,6 +1066,17 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);line-height:1
 .nav::-webkit-scrollbar{width:8px}.nav::-webkit-scrollbar-thumb{background:var(--line2);border-radius:8px}
 .nav-group{margin-bottom:20px}
 .nav-grouplabel{font-size:11px;letter-spacing:.22em;color:var(--tx3);text-transform:uppercase;padding:0 12px 9px;font-weight:700}
+.nav-branch{margin:1px 0}
+.nav-children{display:none;padding-left:11px;margin-left:8px;border-left:1px solid var(--line)}
+.nav-branch.open>.nav-children{display:block}
+.nav-tw{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;flex:none;font-size:9px;color:var(--tx3);transition:transform .18s}
+.nav-branch.open>.nav-item>.nav-tw,.nav-branch.open>.nav-row>.nav-tw{transform:rotate(90deg)}
+.nav-tw-sp{visibility:hidden}
+.nav-item.nav-tree-item{padding:7px 9px;gap:5px;font-size:13.5px}
+.nav-item.nav-tree-item .nav-icon{display:none}
+.nav-file-head .nav-title{font-weight:700;color:var(--tx2)}
+.nav-row{width:100%;display:flex;align-items:center;gap:5px;padding:8px 9px;border:0;cursor:pointer;background:transparent;color:var(--tx3);text-align:left;border-radius:10px;font-family:var(--sans);font-size:11px;letter-spacing:.18em;text-transform:uppercase;font-weight:700}
+.nav-row:hover{color:var(--tx2)}
 .nav-item{width:100%;display:flex;align-items:center;gap:12px;padding:11px 12px;border:1px solid transparent;cursor:pointer;background:transparent;color:var(--tx2);text-align:left;border-radius:12px;font-family:var(--sans);font-size:14.5px;transition:.22s;position:relative}
 .nav-item:hover{background:rgba(127,170,210,.08);color:var(--tx)}
 .nav-item.active{background:linear-gradient(100deg,color-mix(in srgb,var(--ac1) 16%,transparent),transparent);color:var(--tx);border-color:var(--line2)}
@@ -1108,11 +1209,14 @@ ${tokenCSS}
 @media(max-width:860px){:root{--sb:280px}.sidebar{transform:translateX(-100%);transition:.3s;box-shadow:0 0 60px rgba(0,0,0,.6)}.sidebar.open{transform:none}.main{margin-left:0}.menu-toggle{display:block}.wrap{padding:30px 18px 100px}.topbar{padding:14px 16px}.doc-body,.doc-body p,.doc-body li{font-size:15.5px}.doc-body pre{max-width:100%}.doc-body :not(pre)>code{word-break:break-word}#pbar{left:0}.scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:25;opacity:0;pointer-events:none;transition:.3s}.scrim.show{opacity:1;pointer-events:auto}}
 @media print{.sidebar,.topbar,.doc-toc,.bg,.menu-toggle{display:none!important}.main{margin:0}.wrap{max-width:none;padding:0}.doc[hidden]{display:none}.doc-grid{grid-template-columns:1fr}}`;
   const js=`const O=${JSON.stringify(ids)},MODE=${JSON.stringify(opts.layout||'sidebar')},TLIGHT=${t.light?1:0},sb=document.getElementById('sb'),sc=document.getElementById('sc');
-function setActive(id){document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.doc===id));var s=document.getElementById('doc-'+id);if(s)document.getElementById('ct').textContent=s.dataset.title;}
+function expandTo(id){var b=document.querySelector('.nav-item[data-doc="'+id+'"]');var p=b?b.closest('.nav-branch'):null;while(p){p.classList.add('open');var pa=p.parentElement;p=pa?pa.closest('.nav-branch'):null;}}
+function setActive(id){document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.doc===id));expandTo(id);var s=document.getElementById('doc-'+id);if(s)document.getElementById('ct').textContent=s.dataset.title;}
 function show(id){var s=document.getElementById('doc-'+id);if(!s)return;
   if(MODE==='scroll'){s.scrollIntoView({behavior:'smooth',block:'start'});setActive(id);cm();}
   else{document.querySelectorAll('.doc').forEach(d=>d.hidden=true);s.hidden=false;setActive(id);window.scrollTo({top:0});spy(s);try{history.replaceState(null,'','#'+id);}catch(e){}cm();}}
 document.querySelectorAll('[data-doc]').forEach(n=>n.addEventListener('click',()=>show(n.dataset.doc)));
+document.querySelectorAll('.nav-tw').forEach(function(tw){tw.addEventListener('click',function(e){e.stopPropagation();var br=this.closest('.nav-branch');if(br)br.classList.toggle('open');});});
+document.querySelectorAll('.nav-grphead').forEach(function(h){h.addEventListener('click',function(){var br=this.closest('.nav-branch');if(br)br.classList.toggle('open');});});
 document.getElementById('pr').addEventListener('click',function(){document.querySelectorAll('.doc').forEach(d=>d.hidden=false);window.print();if(MODE!=='scroll'){var c=location.hash.slice(1)||O[0];setTimeout(()=>show(c),300);}});
 var MODEB=document.getElementById('mode');function applyFlip(f){document.documentElement.classList[f?'add':'remove']('flip');}
 (function(){var sv=null;try{sv=localStorage.getItem('md2deck_flip');}catch(e){}if(sv===null){var pd=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches;applyFlip((pd&&TLIGHT)||(!pd&&!TLIGHT));}else applyFlip(sv==='1');})();
@@ -1390,7 +1494,7 @@ function saveProject(){
   if(!docs.length){ alert("沒有檔案可存"); return; }
   const payload={generator:"md2deck-project",version:1,created:new Date().toISOString(),
     settings:{theme:activeTheme,accent:customAccent,brand:$('#brandIn').value,tag:$('#tagIn').value,
-      layout:$('#layoutSel').value,cover:$('#coverTog').checked,group:$('#groupTog').checked,
+      layout:$('#layoutSel').value,cover:$('#coverTog').checked,group:$('#groupTog').checked,split:$('#splitSel').value,
       toc:$('#tocTog').checked,search:$('#searchTog').checked,mermaid:$('#mermaidTog').checked,
       math:$('#mathTog').checked,copy:$('#copyTog').checked,prog:$('#progTog').checked},
     docs:docs.map(d=>({name:d.name,relpath:d.relpath,ext:d.ext,kind:d.kind,group:d.group,
@@ -1410,7 +1514,7 @@ function loadProject(file){
     if('accent' in s){customAccent=s.accent||"";}
     if(s.brand!=null)$('#brandIn').value=s.brand;
     if(s.tag!=null)$('#tagIn').value=s.tag;
-    [['layout','layoutSel'],['cover','coverTog'],['group','groupTog'],['toc','tocTog'],['search','searchTog'],['mermaid','mermaidTog'],['math','mathTog'],['copy','copyTog'],['prog','progTog']].forEach(kv=>{
+    [['layout','layoutSel'],['cover','coverTog'],['group','groupTog'],['split','splitSel'],['toc','tocTog'],['search','searchTog'],['mermaid','mermaidTog'],['math','mathTog'],['copy','copyTog'],['prog','progTog']].forEach(kv=>{
       const k=kv[0],el=$('#'+kv[1]); if(!(k in s)||!el)return; if(el.type==="checkbox")el.checked=!!s[k]; else el.value=s[k];
     });
     renderThemes(); applyAccentUI(); saveSettings(); renderList(); refresh();
@@ -1493,14 +1597,14 @@ $('#mergeMdBtn').onclick=mergeMarkdown;
 $('#epubBtn').onclick=exportEPUB;
 $('#jsonBtn').onclick=exportJSON;
 $('#brandIn').oninput=()=>{};$('#tagIn').oninput=()=>{};
-['brandIn','tagIn','mermaidTog','tocTog','mathTog','searchTog','layoutSel','coverTog','groupTog','copyTog','progTog'].forEach(id=>$('#'+id).addEventListener('change',()=>{saveSettings();refresh();}));
+['brandIn','tagIn','mermaidTog','tocTog','mathTog','searchTog','layoutSel','coverTog','groupTog','splitSel','copyTog','progTog'].forEach(id=>$('#'+id).addEventListener('change',()=>{saveSettings();refresh();}));
 
 /* 記住上次設定（localStorage，無法用時自動略過） */
 function saveSettings(){
   try{localStorage.setItem('md2deck',JSON.stringify({
     theme:activeTheme,brand:$('#brandIn').value,tag:$('#tagIn').value,
     mermaid:$('#mermaidTog').checked,toc:$('#tocTog').checked,math:$('#mathTog').checked,search:$('#searchTog').checked,
-    layout:$('#layoutSel').value,cover:$('#coverTog').checked,group:$('#groupTog').checked,copy:$('#copyTog').checked,prog:$('#progTog').checked,accent:customAccent,pdfImg:$('#pdfImgTog').checked
+    layout:$('#layoutSel').value,cover:$('#coverTog').checked,group:$('#groupTog').checked,split:$('#splitSel').value,copy:$('#copyTog').checked,prog:$('#progTog').checked,accent:customAccent,pdfImg:$('#pdfImgTog').checked
   }));}catch(e){}
 }
 function loadSettings(){
@@ -1515,6 +1619,7 @@ function loadSettings(){
     if('layout' in s)$('#layoutSel').value=s.layout;
     if('cover' in s)$('#coverTog').checked=s.cover;
     if('group' in s)$('#groupTog').checked=s.group;
+    if('split' in s && $('#splitSel'))$('#splitSel').value=s.split;
     if('copy' in s)$('#copyTog').checked=s.copy;
     if('prog' in s)$('#progTog').checked=s.prog;
     if(typeof s.accent==='string')customAccent=s.accent;
