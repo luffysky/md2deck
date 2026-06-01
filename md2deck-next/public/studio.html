@@ -569,6 +569,9 @@ async function mdToHTML(text, useMermaid, assets){
   // 抽出 mermaid 區塊（避免被當程式碼高亮）
   const blocks=[];
   text=text.replace(/```mermaid\s*\n([\s\S]*?)```/g,(m,code)=>{blocks.push(code);return `\n@@MERMAID${blocks.length-1}@@\n`;});
+  // 抽出 ```chart 區塊（明確宣告的圖表）
+  const charts=[];
+  text=text.replace(/```chart\s*\n([\s\S]*?)```/g,(m,code)=>{charts.push(code);return `\n@@CHART${charts.length-1}@@\n`;});
   let htmlStr=marked.parse(text,{breaks:true,gfm:true});
   const box=document.createElement('div'); box.innerHTML=htmlStr;
   // 高亮程式碼
@@ -612,6 +615,12 @@ async function mdToHTML(text, useMermaid, assets){
     if(useMermaid && window.mermaid){try{const r=await mermaid.render('mm'+(uid++)+'_'+i,blocks[i]);svg=`<div class="mermaid-fig">${r.svg}</div>`;}catch(e){}}
     out=out.replace(`<p>@@MERMAID${i}@@</p>`,svg).replace(`@@MERMAID${i}@@`,svg);
   }
+  // 還原 ```chart → 內嵌 SVG 圖表（解析失敗則退回程式碼區塊）
+  for(let i=0;i<charts.length;i++){
+    const p=parseChartBlock(charts[i]);
+    const rep=(p&&explicitChartHTML(p))||`<pre><code>${esc(charts[i])}</code></pre>`;
+    out=out.replace(`<p>@@CHART${i}@@</p>`,rep).replace(`@@CHART${i}@@`,rep);
+  }
   return out;
 }
 function codeToHTML(text,lang){
@@ -645,10 +654,15 @@ function linkifyEsc(s){
 /* ============ 數字表格 → 內嵌 SVG 圖表（opt-in 切換鈕） ============ */
 function parseNum(s){
   if(s==null) return NaN;
-  let t=String(s).trim().replace(/[\s,_$€£¥%]/g,"");
-  if(/^\(.*\)$/.test(t)) t="-"+t.slice(1,-1);   // 會計負數 (123) → -123
-  if(t===""||!/^-?\d*\.?\d+$/.test(t)) return NaN;
-  return parseFloat(t);
+  let t=String(s).trim();
+  if(t==="") return NaN;
+  const neg=/^\(.*\)$/.test(t); if(neg) t=t.slice(1,-1).trim();   // 會計負數 (123)
+  t=t.replace(/,/g,"").replace(/^(NT\$|US\$|RMB|HK\$|[$€£¥₩＄])\s*/i,"");  // 去千分位/貨幣前綴
+  // 數字在開頭，後面最多 6 個非數字字元當單位（°C / mm / % / 元 / 度…）
+  const m=t.match(/^(-?\d*\.?\d+)\s*[^\d\s]{0,6}\s*$/);
+  if(!m) return NaN;
+  let v=parseFloat(m[1]); if(isNaN(v)) return NaN;
+  return neg?-Math.abs(v):v;
 }
 function fmtNum(v){ const a=Math.abs(v);
   if(a>=1e9) return (v/1e9).toFixed(1)+"B";
@@ -664,8 +678,10 @@ function tableToMatrix(tbl){
   const cellText=tr=>[...tr.querySelectorAll("th,td")].map(c=>c.textContent.trim());
   const header=cellText(trs[0]); const ncol=header.length;
   if(ncol<2) return null;
-  const bodyRows=trs.slice(1).map(cellText).filter(r=>r.length===ncol);
-  if(bodyRows.length<2||bodyRows.length>60) return null;  // 太多列不適合畫線
+  // 容忍不齊列（合併儲存格等）：補空或截斷到 ncol，而非丟棄
+  const bodyRows=trs.slice(1).map(cellText)
+    .map(r=> r.length<ncol ? r.concat(Array(ncol-r.length).fill("")) : r.slice(0,ncol));
+  if(bodyRows.length<2||bodyRows.length>366) return null;  // 上限 366（涵蓋一年逐日）
   const labels=bodyRows.map(r=>r[0]);
   const series=[];
   for(let c=1;c<ncol;c++){
@@ -675,15 +691,27 @@ function tableToMatrix(tbl){
   }
   return series.length?{labels,series}:null;
 }
-function buildChartSVG(m){
+/* 自動選圖型：多系列或時間/數列型 X → 折線；單系列類別型 → 長條 */
+function pickChartType(m){
+  if(m.series.length>1) return "line";
+  const n=m.labels.length;
+  const timeRe=/^\d{4}$|\d{1,2}\s*月|^Q[1-4]$|\d{4}[-\/]\d{1,2}|週|周|年度|季|day|week|month|year|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/i;
+  const timeCount=m.labels.filter(l=>timeRe.test(String(l))).length;
+  if(timeCount>=Math.ceil(n*0.6)) return "line";
+  const numSeq=m.labels.filter(l=>!isNaN(parseNum(l))).length;
+  if(numSeq>=Math.ceil(n*0.8)) return "line";
+  return "bar";
+}
+function buildChartSVG(m,type){
+  type=type||pickChartType(m);
   const W=680,H=320,PL=56,PR=18,PT=22,PB=46,iw=W-PL-PR,ih=H-PT-PB;
   let mn=Infinity,mx=-Infinity;
   m.series.forEach(s=>s.values.forEach(v=>{if(!isNaN(v)){if(v<mn)mn=v;if(v>mx)mx=v;}}));
   if(mn===Infinity) return null;
+  if(type==="bar"&&mn>0) mn=0;                 // 長條圖基線歸零較直覺
   if(mn===mx){mx=mn+1;mn=mn-1;}
-  const pad=(mx-mn)*0.08; mn-=pad; mx+=pad;
+  const pad=(mx-mn)*0.08; if(type!=="bar"||mn!==0) mn-=pad; mx+=pad;
   const n=m.labels.length;
-  const x=i=> n<=1?PL+iw/2 : PL+iw*i/(n-1);
   const y=v=> PT+ih*(1-(v-mn)/(mx-mn));
   const PAL=["var(--ac1)","var(--ac2)","#f6c177","#ff8d7a","#7ad7ff","#a78bfa"];
   let grid="";
@@ -691,15 +719,50 @@ function buildChartSVG(m){
     grid+=`<line x1="${PL}" y1="${yy.toFixed(1)}" x2="${W-PR}" y2="${yy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`;
     grid+=`<text x="${PL-8}" y="${(yy+4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--tx3)">${fmtNum(val)}</text>`;
   }
-  const step=Math.max(1,Math.ceil(n/8)); let xlab="";
-  m.labels.forEach((l,i)=>{ if(i%step===0||i===n-1) xlab+=`<text x="${x(i).toFixed(1)}" y="${H-PB+20}" text-anchor="middle" font-size="11" fill="var(--tx3)">${escSVG(l).slice(0,12)}</text>`; });
-  let paths="",legend="";
-  m.series.forEach((s,si)=>{ const col=PAL[si%PAL.length]; const pts=[]; let dots="";
-    s.values.forEach((v,i)=>{ if(isNaN(v))return; const px=x(i),py=y(v); pts.push(px.toFixed(1)+","+py.toFixed(1)); dots+=`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3" fill="${col}"/>`; });
-    paths+=`<polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>${dots}`;
+  let body="",legend="";
+  if(type==="bar"){
+    const s=m.series[0], col=PAL[0], band=iw/n, bw=Math.min(46,band*0.62);
+    s.values.forEach((v,i)=>{ if(isNaN(v))return; const cx=PL+band*(i+0.5), py=y(v), h0=y(Math.max(mn,0));
+      const top=Math.min(py,h0), hh=Math.abs(h0-py);
+      body+=`<rect x="${(cx-bw/2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0,hh).toFixed(1)}" rx="3" fill="${col}" opacity=".85"/>`;
+    });
     legend+=`<span class="chart-leg"><i style="background:${col}"></i>${escSVG(s.name)}</span>`;
+    const step=Math.max(1,Math.ceil(n/12)); let xlab="";
+    m.labels.forEach((l,i)=>{ if(i%step===0) xlab+=`<text x="${(PL+band*(i+0.5)).toFixed(1)}" y="${H-PB+20}" text-anchor="middle" font-size="11" fill="var(--tx3)">${escSVG(l).slice(0,10)}</text>`; });
+    body+=xlab;
+  }else{
+    const x=i=> n<=1?PL+iw/2 : PL+iw*i/(n-1);
+    m.series.forEach((s,si)=>{ const col=PAL[si%PAL.length]; const pts=[]; let dots="";
+      s.values.forEach((v,i)=>{ if(isNaN(v))return; const px=x(i),py=y(v); pts.push(px.toFixed(1)+","+py.toFixed(1)); dots+=`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3" fill="${col}"/>`; });
+      body+=`<polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>${dots}`;
+      legend+=`<span class="chart-leg"><i style="background:${col}"></i>${escSVG(s.name)}</span>`;
+    });
+    const step=Math.max(1,Math.ceil(n/8)); let xlab="";
+    m.labels.forEach((l,i)=>{ if(i%step===0||i===n-1) xlab+=`<text x="${x(i).toFixed(1)}" y="${H-PB+20}" text-anchor="middle" font-size="11" fill="var(--tx3)">${escSVG(l).slice(0,12)}</text>`; });
+    body+=xlab;
+  }
+  return `<div class="chart-legend">${legend}</div><svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="圖表">${grid}${body}</svg>`;
+}
+/* 解析 ```chart 區塊：type/title/x + 任意系列；回 {type,title,labels,series} */
+function parseChartBlock(code){
+  const rows=code.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  let type="",title="",labels=null; const series=[];
+  rows.forEach(l=>{
+    const i=l.indexOf(":"),i2=l.indexOf("："); let p=(i<0)?i2:(i2<0?i:Math.min(i,i2));
+    if(p<0) return;
+    const k=l.slice(0,p).trim(), v=l.slice(p+1).trim(), kl=k.toLowerCase();
+    if(kl==="type"||k==="類型") type=v.toLowerCase();
+    else if(kl==="title"||k==="標題") title=v;
+    else if(kl==="x"||kl==="labels"||k==="x軸"||k==="類別") labels=v.split(/[,，]/).map(s=>s.trim());
+    else series.push({name:k,values:v.split(/[,，]/).map(s=>parseNum(s))});
   });
-  return `<div class="chart-legend">${legend}</div><svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="圖表">${grid}${xlab}${paths}</svg>`;
+  if(!labels||!series.length) return null;
+  return {type:(type==="bar"||type==="line")?type:"",title,labels,series};
+}
+function explicitChartHTML(p){
+  const svg=buildChartSVG({labels:p.labels,series:p.series}, p.type||undefined);
+  if(!svg) return "";
+  return `<div class="chart-box chart-explicit">${p.title?`<div class="chart-cap">${esc(p.title)}</div>`:""}${svg}</div>`;
 }
 /* 掃描 body 內所有數字表格，旁邊掛上「📈 圖表」切換鈕 + 隱藏的圖表盒 */
 function decorateTables(html){
@@ -741,6 +804,23 @@ function matrixToTable(rows){
   return `<div class="table-wrap"><table><thead><tr>${head.map(h=>`<th>${linkifyEsc(h)}</th>`).join("")}</tr></thead>`+
     `<tbody>${body.map(r=>`<tr>${r.map(c=>`<td>${linkifyEsc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
+/* 「沒表格的數據」：連續 ≥3 行的「標籤：數值」清單（冒號分隔，或單空格+已知單位）→ 升格表格 */
+const SERIES_UNIT="(?:%|％|°[CcFf]|度|mm|cm|km|m|kg|g|t|L|ml|元|円|＄|人|個|位|次|件|筆|票|分|秒|時|台|kWh|hPa|km\\/h|m\\/s)?";
+function sniffSeriesBlock(lines,start){
+  const reColon=/^\s*(?:[-*•–·]\s+)?(.+?)\s*[:：]\s*(-?[\d][\d.,]*\s*[^\d\s]{0,6})\s*$/;
+  const reSpace=new RegExp("^\\s*(?:[-*•–·]\\s+)?(\\S.{0,22}?)\\s+(-?[\\d][\\d.,]*\\s*"+SERIES_UNIT+")\\s*$");
+  const rows=[]; let j=start;
+  while(j<lines.length && lines[j].trim()){
+    const L=lines[j];
+    const m=reColon.exec(L)||reSpace.exec(L);
+    if(!m){ return null; }
+    const label=m[1].trim(), val=m[2].trim();
+    if(!label || /^[\d.,]+$/.test(label) || isNaN(parseNum(val))){ return null; }
+    rows.push([label,val]); j++;
+  }
+  if(rows.length<3) return null;
+  return {rows:[["項目","數值"],...rows], endIdx:j};
+}
 
 /* 純文字 → 可讀排版：逐行解析，偵測標題、項目清單、段落，保留行內換行、網址成連結 */
 function textToHTML(text){
@@ -764,6 +844,8 @@ function textToHTML(text){
   for(let i=0;i<lines.length;i++){
     const line=lines[i].replace(/\s+$/,"");
     if(!line.trim()){ flushPara(); flushList(); continue; }
+    // 區塊開頭先試「沒表格的數據」（含 bullet 開頭的 標籤:數值 清單）→ 升格表格
+    if(para.length===0 && !list){ const sb=sniffSeriesBlock(lines,i); if(sb){ html+=matrixToTable(sb.rows); i=sb.endIdx-1; continue; } }
     if(bulletRe.test(line)){ flushPara(); const ordered=/^\s*\d+[.)、]/.test(line); if(!list){list=[];listType=ordered?"ol":"ul";} list.push(`<li>${linkifyEsc(line.replace(bulletRe,""))}</li>`); continue; }
     flushList();
     if(para.length===0){ const tb=sniffTableBlock(lines,i); if(tb){ flushPara(); html+=matrixToTable(tb.rows); i=tb.endIdx-1; continue; } }
@@ -1314,6 +1396,8 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);line-height:1
 .doc-body .chart-leg{display:inline-flex;align-items:center;gap:6px}
 .doc-body .chart-leg i{width:14px;height:3px;border-radius:2px;display:inline-block}
 .doc-body .chart-svg{width:100%;height:auto;display:block}
+.doc-body .chart-explicit{margin:22px 0}
+.doc-body .chart-cap{text-align:center;font-family:var(--serif);font-weight:700;font-size:15px;color:var(--tx);margin-bottom:6px}
 .doc-body :not(pre)>code{font-family:var(--mono);font-size:.86em;padding:2px 7px;border-radius:6px;background:color-mix(in srgb,var(--tx) 10%,transparent);color:var(--em);border:1px solid var(--line)}
 .doc-body pre{margin:20px 0;border-radius:14px;border:1px solid var(--line2);overflow:hidden;background:var(--code-bg);box-shadow:0 14px 40px rgba(0,0,0,.3)}
 .doc-body pre::before{content:"";display:block;height:38px;border-bottom:1px solid var(--line);background-color:rgba(127,170,210,.05);background-image:radial-gradient(circle 5px at 20px 19px,#ff6f6f 99%,transparent),radial-gradient(circle 5px at 40px 19px,#ffcf5e 99%,transparent),radial-gradient(circle 5px at 60px 19px,#5fe3a0 99%,transparent);background-repeat:no-repeat}
