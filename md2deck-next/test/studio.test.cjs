@@ -85,8 +85,8 @@ function grab(name) {
 }
 global.DOMParser = _win.DOMParser;
 const SERIES_UNIT_DECL = html.match(/const SERIES_UNIT=[^;]+;/)[0];
-const FUNCS = ['parseNum', 'fmtNum', 'escSVG', 'pickChartType', 'tableToMatrix', 'buildChartSVG',
-  'parseChartBlock', 'explicitChartHTML', 'decorateTables', 'sniffTableBlock', 'sniffSeriesBlock',
+const FUNCS = ['parseNum', 'fmtNum', 'escSVG', 'isAxisLabel', 'pickChartType', 'tableToMatrix', 'buildChartSVG',
+  'parseChartBlock', 'explicitChartHTML', 'alignNumericCols', 'decorateTables', 'sniffTableBlock', 'sniffSeriesBlock',
   'matrixToTable', 'textToHTML', 'pptSlideTables', 'hashStr',
   'odfInline', 'odfList', 'odfTable', 'odfFlow', 'odfSheets', 'odfSlides', 'rtfToHTML', 'epubResolve'];
 eval(SERIES_UNIT_DECL + '\n' + FUNCS.map(grab).join('\n'));
@@ -110,6 +110,55 @@ ok('帶單位表格掛圖表鈕 + SVG', decd.includes('chart-toggle') && decd.in
 const textTable = '<table><tr><td>姓名</td><td>部門</td></tr>' +
   '<tr><td>小明</td><td>工程</td></tr><tr><td>小華</td><td>設計</td></tr></table>';
 ok('純文字表格不掛圖表', !decorateTables(textTable).includes('chart-toggle'));
+
+section('表格方向偵測 / 矩陣（含 Excel 合併標題 bug 重現）');
+function tableEl(htmlStr) { const d = document.createElement('div'); d.innerHTML = htmlStr; return d.querySelector('table'); }
+const months = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+(function () {
+  // isAxisLabel
+  ok('isAxisLabel 1月', isAxisLabel('1月'));
+  ok('isAxisLabel Q1', isAxisLabel('Q1'));
+  ok('isAxisLabel 28 → false', !isAxisLabel('28'));
+  ok('isAxisLabel 台北市 → false', !isAxisLabel('台北市'));
+
+  // 重現使用者的 Excel：合併標題列 + 城市在列 + 月份在「最後一列」
+  const cities = [['台北市', 28, 28, 29, 30, 33, 35, 40, 40, 36, 32, 28, 25], ['台中市', 30, 30, 31, 32, 35, 38, 42, 43, 38, 36, 32, 30], ['台南市', 31, 32, 33, 33, 36, 40, 42, 44, 40, 36, 34, 32]];
+  let badHtml = '<table><tr><td colspan="13">三市平均月氣溫</td></tr>';
+  cities.forEach(r => { badHtml += '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>'; });
+  badHtml += '<tr><td></td>' + months.map(m => `<td>${m}</td>`).join('') + '</tr></table>';
+  const mBad = tableToMatrix(tableEl(badHtml));
+  ok('合併標題表：偵測成功（不再 null）', !!mBad);
+  ok('合併標題表：3 系列（三市）', mBad && mBad.series.length === 3);
+  ok('合併標題表：X=12 個月', mBad && mBad.labels.length === 12 && mBad.labels[0] === '1月');
+  ok('合併標題表：系列名=城市', mBad && mBad.series[0].name === '台北市' && mBad.series[0].values.length === 12);
+  ok('合併標題表：decorateTables 出圖', decorateTables(badHtml).includes('chart-toggle'));
+
+  // 寬矩陣（月份在頂列）→ 每列一系列
+  let wide = '<table><tr><td></td>' + months.map(m => `<th>${m}</th>`).join('') + '</tr>';
+  cities.forEach(r => { wide += '<tr>' + r.map((c, i) => i === 0 ? `<td>${c}</td>` : `<td>${c}</td>`).join('') + '</tr>'; });
+  wide += '</table>';
+  const mWide = tableToMatrix(tableEl(wide));
+  ok('寬矩陣 → 3 系列 × 12 月', mWide && mWide.series.length === 3 && mWide.labels.length === 12);
+
+  // 高表格（月份在列、指標在欄）→ 每欄一系列
+  let tall = '<table><tr><th>月份</th><th>雨量</th><th>氣溫</th></tr>';
+  for (let i = 0; i < 12; i++) tall += `<tr><td>${months[i]}</td><td>${100 + i}</td><td>${15 + i}</td></tr>`;
+  tall += '</table>';
+  const mTall = tableToMatrix(tableEl(tall));
+  ok('高表格 → 2 系列（雨量/氣溫）', mTall && mTall.series.length === 2 && mTall.labels.length === 12);
+
+  // 兩欄 月|值 → 1 系列
+  let two = '<table><tr><th>月份</th><th>雨量</th></tr>';
+  for (let i = 0; i < 12; i++) two += `<tr><td>${months[i]}</td><td>${100 + i}</td></tr>`;
+  two += '</table>';
+  const mTwo = tableToMatrix(tableEl(two));
+  ok('兩欄 → 1 系列', mTwo && mTwo.series.length === 1 && mTwo.labels.length === 12);
+
+  // 數字欄右對齊
+  const at = tableEl(tall); alignNumericCols(at);
+  ok('alignNumericCols：數字欄加 .tnum', at.querySelectorAll('td.tnum').length > 0);
+  ok('alignNumericCols：文字欄不加', [...at.tBodies[0].rows].every(r => !r.cells[0].classList.contains('tnum')));
+})();
 
 section('圖表自動選型');
 ok('月份 → 折線', pickChartType({ labels: ['1月', '2月', '3月'], series: [{ name: 'x', values: [1, 2, 3] }] }) === 'line');

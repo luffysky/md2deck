@@ -676,23 +676,42 @@ function fmtNum(v){ const a=Math.abs(v);
   return (Math.round(v*100)/100).toString();
 }
 function escSVG(s){ return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
-/* 表格 DOM → {labels, series}；只在「第一欄當類別、其餘欄多為數字」時回傳 */
+/* 像「類別軸」的標籤（時間 / 月份 / 季 / 星期…），用來辨識表頭列在頂或底 */
+function isAxisLabel(s){ s=String(s).trim();
+  return /\d{1,4}\s*(月|年|週|周|季|日|號|号|期|時|点|點)/.test(s)
+    || /^(Q[1-4]|FY\d|[一二三四五六七八九十]+\s*月|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|mon|tue|wed|thu|fri|sat|sun)/i.test(s);
+}
+/* 表格 DOM → {labels, series}：colspan 感知、丟標題列、自動找類別軸列、自動判斷方向 */
 function tableToMatrix(tbl){
   const trs=[...tbl.querySelectorAll("tr")];
-  if(trs.length<3) return null;                 // 表頭 + 至少 2 列資料
-  const cellText=tr=>[...tr.querySelectorAll("th,td")].map(c=>c.textContent.trim());
-  const header=cellText(trs[0]); const ncol=header.length;
+  if(trs.length<2) return null;
+  // colspan 感知：合併儲存格展開成多欄（首格放文字，其餘補空）
+  const raw=trs.map(tr=>{ const out=[]; [...tr.querySelectorAll("th,td")].forEach(c=>{ const span=Math.min(40,+(c.getAttribute("colspan")||1)||1); out.push(c.textContent.trim()); for(let k=1;k<span;k++) out.push(""); }); return out; });
+  const ncol=raw.reduce((m,r)=>Math.max(m,r.length),0);
   if(ncol<2) return null;
-  // 容忍不齊列（合併儲存格等）：補空或截斷到 ncol，而非丟棄
-  const bodyRows=trs.slice(1).map(cellText)
-    .map(r=> r.length<ncol ? r.concat(Array(ncol-r.length).fill("")) : r.slice(0,ncol));
-  if(bodyRows.length<2||bodyRows.length>366) return null;  // 上限 366（涵蓋一年逐日）
-  const labels=bodyRows.map(r=>r[0]);
-  const series=[];
-  for(let c=1;c<ncol;c++){
-    const vals=bodyRows.map(r=>parseNum(r[c]));
-    const ok=vals.filter(v=>!isNaN(v)).length;
-    if(ok>=Math.max(2,Math.ceil(bodyRows.length*0.6))) series.push({name:header[c]||("系列"+c),values:vals});
+  let rows=raw.map(r=> r.length<ncol ? r.concat(Array(ncol-r.length).fill("")) : r.slice(0,ncol));
+  rows=rows.filter(r=>r.filter(c=>c!=="").length>=2);   // 丟掉全空 / 單格(合併標題)列
+  if(rows.length<2) return null;
+  if(rows.length>367) rows=rows.slice(0,367);
+  const num=parseNum;
+  // 類別軸列 = col>=1 最多「文字 / 軸標籤」的那列（表頭可能在頂或底）
+  const axisScore=r=>{ let a=0; for(let c=1;c<ncol;c++){ const v=r[c]; if(v==="") continue; if(isNaN(num(v))||isAxisLabel(v)) a++; } return a; };
+  let hi=-1,hr=0; rows.forEach((r,i)=>{ const s=axisScore(r); if(s>hi){hi=s;hr=i;} });
+  const header=rows[hr];
+  const dataRows=rows.filter((r,i)=>i!==hr).filter(r=>{ for(let c=1;c<ncol;c++) if(!isNaN(num(r[c]))&&!isAxisLabel(r[c])) return true; return false; });
+  if(!dataRows.length) return null;
+  const colCats=header.slice(1);
+  // 寬矩陣（資料列數 ≤ 類別數）→ 每列一系列；否則 → 每欄一系列
+  let labels,series;
+  if(dataRows.length>=2 && dataRows.length<=colCats.length){
+    labels=colCats.map((c,i)=> c||("第"+(i+1)) );
+    series=dataRows.map((r,i)=>({name:r[0]||("系列"+(i+1)),values:r.slice(1).map(num)}))
+      .filter(s=>s.values.filter(v=>!isNaN(v)).length>=2);
+  }else{
+    labels=dataRows.map(r=>r[0]);
+    series=[];
+    for(let c=1;c<ncol;c++){ const vals=dataRows.map(r=>num(r[c])); const ok=vals.filter(v=>!isNaN(v)).length;
+      if(ok>=Math.max(2,Math.ceil(dataRows.length*0.6))) series.push({name:header[c]||("系列"+c),values:vals}); }
   }
   return series.length?{labels,series}:null;
 }
@@ -769,11 +788,27 @@ function explicitChartHTML(p){
   if(!svg) return "";
   return `<div class="chart-box chart-explicit">${p.title?`<div class="chart-cap">${esc(p.title)}</div>`:""}${svg}</div>`;
 }
-/* 掃描 body 內所有數字表格，旁邊掛上「📈 圖表」切換鈕 + 隱藏的圖表盒 */
+/* 數字欄右對齊 + 等寬數字（美化）：多數 body 儲存格為純數字的欄加 .tnum */
+function alignNumericCols(tbl){
+  const bodyTrs=[...(tbl.tBodies[0]?tbl.tBodies[0].rows:tbl.rows)];
+  const dataTrs=bodyTrs.filter(r=>r.cells.length);
+  if(dataTrs.length<2) return;
+  const ncol=dataTrs.reduce((m,r)=>Math.max(m,r.cells.length),0);
+  for(let c=0;c<ncol;c++){
+    let nNum=0,nTot=0;
+    dataTrs.forEach(r=>{ const cell=r.cells[c]; if(!cell)return; const t=cell.textContent.trim(); if(!t)return; nTot++; if(!isNaN(parseNum(t))&&/\d/.test(t)&&!isAxisLabel(t)) nNum++; });
+    if(nTot>=2 && nNum>=Math.ceil(nTot*0.7)){
+      dataTrs.forEach(r=>{ if(r.cells[c]) r.cells[c].classList.add("tnum"); });
+      const head=tbl.tHead; if(head)[...head.rows].forEach(r=>{ if(r.cells[c]) r.cells[c].classList.add("tnum"); });
+    }
+  }
+}
+/* 掃描 body 內所有數字表格，旁邊掛上「📈 圖表」切換鈕 + 隱藏的圖表盒，並美化數字欄 */
 function decorateTables(html){
   if(!html||html.indexOf("<table")<0) return html;
   const box=document.createElement("div"); box.innerHTML=html;
   box.querySelectorAll("table").forEach(tbl=>{
+    alignNumericCols(tbl);
     const m=tableToMatrix(tbl); if(!m) return;
     const svg=buildChartSVG(m); if(!svg) return;
     const host=tbl.closest(".table-wrap")||tbl;
@@ -900,21 +935,27 @@ async function xlsxToHTML(buf){
           note=`<p class="xlsx-note">⚠ 此工作表共 ${rows.toLocaleString()} 列，僅顯示前 ${CAP.toLocaleString()} 列。</p>`; }
       }catch(e){}
       let t=XLSX.utils.sheet_to_html(ws,{header:""});
-      // Detect bold first row (Excel header convention) before stripping styles
-      const firstRowBold=/<tbody>\s*<tr[^>]*>(?:\s*<td[^>]*style="[^"]*font-weight:\s*bold[^"]*")/i.test(t);
-      // Strip inline styles & old-style border attr (they assume white theme, clash with dark)
-      t=t.replace(/\s+style="[^"]*"/g,'').replace(/\s+border="\d+"/g,'');
-      // Remove colgroup (fixed col widths break responsive layout)
-      t=t.replace(/<colgroup>[\s\S]*?<\/colgroup>/gi,'');
-      // Promote first row to <thead><tr><th> when it was bold-styled
-      if(firstRowBold){
-        t=t.replace(/(<tbody>\s*)(<tr>)([\s\S]*?)(<\/tr>)/,(m,pre,open,cells,close)=>{
-          const hcells=cells.replace(/<td>/g,'<th>').replace(/<\/td>/g,'</th>');
-          return `<thead>${open}${hcells}${close}</thead>${pre}`;
-        });
+      const boldFirst=/<tr[^>]*>\s*<td[^>]*font-weight:\s*bold/i.test(t.replace(/<colgroup[\s\S]*?<\/colgroup>/i,""));
+      const box=document.createElement('div'); box.innerHTML=t;
+      const table=box.querySelector('table');
+      if(table){
+        table.querySelectorAll('[style]').forEach(el=>el.removeAttribute('style'));   // inline style 假設白底，與暗色互咬
+        table.querySelectorAll('colgroup').forEach(c=>c.remove());                     // 固定欄寬破壞響應式
+        table.removeAttribute('border');
+        let trs=[...table.rows];
+        // 合併標題列（首列只有一個有內容儲存格）→ <caption>
+        if(trs.length>=2){ const ne=[...trs[0].cells].filter(c=>c.textContent.trim()), ne2=[...trs[1].cells].filter(c=>c.textContent.trim());
+          if(ne.length===1 && ne2.length>=2){ const cap=document.createElement('caption'); cap.textContent=ne[0].textContent.trim(); table.insertBefore(cap,table.firstChild); trs[0].remove(); trs=[...table.rows]; } }
+        // 首列升格表頭：原本粗體，或首列全文字且其後有數字
+        if(trs.length>=2){ const hdr=[...trs[0].cells].filter(c=>c.textContent.trim());
+          const allText=hdr.length>0 && hdr.every(c=>isNaN(parseNum(c.textContent)));
+          const laterNum=trs.slice(1).some(r=>[...r.cells].some(c=>!isNaN(parseNum(c.textContent))));
+          if(boldFirst || (allText&&laterNum)){ const thead=document.createElement('thead'), htr=document.createElement('tr');
+            [...trs[0].cells].forEach(td=>{ const th=document.createElement('th'); th.textContent=td.textContent; if(td.colSpan>1)th.colSpan=td.colSpan; htr.appendChild(th); });
+            thead.appendChild(htr); table.insertBefore(thead, table.tBodies[0]||table.firstChild); trs[0].remove(); } }
       }
-      t=DOMPurify.sanitize(t,{ADD_ATTR:['id','class','colspan','rowspan']});
-      html+=`<h2 id="${slug(name)}">${esc(name)}</h2>${note}<div class="table-wrap xlsx-wrap">${t}</div>`;
+      const t2=DOMPurify.sanitize(box.innerHTML,{ADD_ATTR:['id','class','colspan','rowspan']});
+      html+=`<h2 id="${slug(name)}">${esc(name)}</h2>${note}<div class="table-wrap xlsx-wrap">${t2}</div>`;
     });
     return html||"<p>（空活頁簿）</p>";
   }catch(e){ return "<p>Excel 解析失敗："+esc(e.message||"")+"</p>"; }
@@ -1552,6 +1593,8 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);line-height:1
 .doc-body tbody td{padding:12px 16px;border-bottom:1px solid var(--line);color:var(--tx2);vertical-align:top}
 .doc-body tbody tr:last-child td{border-bottom:0}.doc-body tbody tr:hover td{background:rgba(127,170,210,.05)}
 .doc-body table code{white-space:nowrap}
+.doc-body table caption{caption-side:top;text-align:left;font-family:var(--serif);font-weight:700;font-size:15.5px;color:var(--tx);padding:12px 16px 10px}
+.doc-body tbody td.tnum,.doc-body thead th.tnum{text-align:right;font-variant-numeric:tabular-nums}
 .doc-body .chart-bar{margin:14px 0 0;display:flex;justify-content:flex-end}
 .doc-body .chart-toggle{font-size:12.5px;padding:6px 13px;border-radius:9px;border:1px solid var(--line2);background:color-mix(in srgb,var(--ac1) 10%,transparent);color:var(--ac1);cursor:pointer;font-family:var(--sans);transition:.18s}
 .doc-body .chart-toggle:hover{border-color:var(--ac1)}
