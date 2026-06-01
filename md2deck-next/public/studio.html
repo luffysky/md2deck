@@ -642,9 +642,109 @@ function linkifyEsc(s){
   return String(s).split(/(https?:\/\/[^\s<>"']+)/g)
     .map((p,i)=> i%2 ? `<a href="${p.replace(/"/g,"%22")}" target="_blank" rel="noopener">${esc(p)}</a>` : esc(p)).join("");
 }
+/* ============ 數字表格 → 內嵌 SVG 圖表（opt-in 切換鈕） ============ */
+function parseNum(s){
+  if(s==null) return NaN;
+  let t=String(s).trim().replace(/[\s,_$€£¥%]/g,"");
+  if(/^\(.*\)$/.test(t)) t="-"+t.slice(1,-1);   // 會計負數 (123) → -123
+  if(t===""||!/^-?\d*\.?\d+$/.test(t)) return NaN;
+  return parseFloat(t);
+}
+function fmtNum(v){ const a=Math.abs(v);
+  if(a>=1e9) return (v/1e9).toFixed(1)+"B";
+  if(a>=1e6) return (v/1e6).toFixed(1)+"M";
+  if(a>=1e3) return (v/1e3).toFixed(1)+"k";
+  return (Math.round(v*100)/100).toString();
+}
+function escSVG(s){ return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+/* 表格 DOM → {labels, series}；只在「第一欄當類別、其餘欄多為數字」時回傳 */
+function tableToMatrix(tbl){
+  const trs=[...tbl.querySelectorAll("tr")];
+  if(trs.length<3) return null;                 // 表頭 + 至少 2 列資料
+  const cellText=tr=>[...tr.querySelectorAll("th,td")].map(c=>c.textContent.trim());
+  const header=cellText(trs[0]); const ncol=header.length;
+  if(ncol<2) return null;
+  const bodyRows=trs.slice(1).map(cellText).filter(r=>r.length===ncol);
+  if(bodyRows.length<2||bodyRows.length>60) return null;  // 太多列不適合畫線
+  const labels=bodyRows.map(r=>r[0]);
+  const series=[];
+  for(let c=1;c<ncol;c++){
+    const vals=bodyRows.map(r=>parseNum(r[c]));
+    const ok=vals.filter(v=>!isNaN(v)).length;
+    if(ok>=Math.max(2,Math.ceil(bodyRows.length*0.6))) series.push({name:header[c]||("系列"+c),values:vals});
+  }
+  return series.length?{labels,series}:null;
+}
+function buildChartSVG(m){
+  const W=680,H=320,PL=56,PR=18,PT=22,PB=46,iw=W-PL-PR,ih=H-PT-PB;
+  let mn=Infinity,mx=-Infinity;
+  m.series.forEach(s=>s.values.forEach(v=>{if(!isNaN(v)){if(v<mn)mn=v;if(v>mx)mx=v;}}));
+  if(mn===Infinity) return null;
+  if(mn===mx){mx=mn+1;mn=mn-1;}
+  const pad=(mx-mn)*0.08; mn-=pad; mx+=pad;
+  const n=m.labels.length;
+  const x=i=> n<=1?PL+iw/2 : PL+iw*i/(n-1);
+  const y=v=> PT+ih*(1-(v-mn)/(mx-mn));
+  const PAL=["var(--ac1)","var(--ac2)","#f6c177","#ff8d7a","#7ad7ff","#a78bfa"];
+  let grid="";
+  for(let g=0;g<=4;g++){ const yy=PT+ih*g/4, val=mx-(mx-mn)*g/4;
+    grid+=`<line x1="${PL}" y1="${yy.toFixed(1)}" x2="${W-PR}" y2="${yy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`;
+    grid+=`<text x="${PL-8}" y="${(yy+4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--tx3)">${fmtNum(val)}</text>`;
+  }
+  const step=Math.max(1,Math.ceil(n/8)); let xlab="";
+  m.labels.forEach((l,i)=>{ if(i%step===0||i===n-1) xlab+=`<text x="${x(i).toFixed(1)}" y="${H-PB+20}" text-anchor="middle" font-size="11" fill="var(--tx3)">${escSVG(l).slice(0,12)}</text>`; });
+  let paths="",legend="";
+  m.series.forEach((s,si)=>{ const col=PAL[si%PAL.length]; const pts=[]; let dots="";
+    s.values.forEach((v,i)=>{ if(isNaN(v))return; const px=x(i),py=y(v); pts.push(px.toFixed(1)+","+py.toFixed(1)); dots+=`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3" fill="${col}"/>`; });
+    paths+=`<polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>${dots}`;
+    legend+=`<span class="chart-leg"><i style="background:${col}"></i>${escSVG(s.name)}</span>`;
+  });
+  return `<div class="chart-legend">${legend}</div><svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="圖表">${grid}${xlab}${paths}</svg>`;
+}
+/* 掃描 body 內所有數字表格，旁邊掛上「📈 圖表」切換鈕 + 隱藏的圖表盒 */
+function decorateTables(html){
+  if(!html||html.indexOf("<table")<0) return html;
+  const box=document.createElement("div"); box.innerHTML=html;
+  box.querySelectorAll("table").forEach(tbl=>{
+    const m=tableToMatrix(tbl); if(!m) return;
+    const svg=buildChartSVG(m); if(!svg) return;
+    const host=tbl.closest(".table-wrap")||tbl;
+    const cid="chart"+(uid++);
+    const bar=document.createElement("div"); bar.className="chart-bar";
+    bar.innerHTML=`<button class="chart-toggle" type="button" data-chart="${cid}">📈 圖表</button>`;
+    const cbox=document.createElement("div"); cbox.className="chart-box"; cbox.id=cid; cbox.hidden=true; cbox.innerHTML=svg;
+    host.parentNode.insertBefore(bar,host);
+    if(host.nextSibling) host.parentNode.insertBefore(cbox,host.nextSibling); else host.parentNode.appendChild(cbox);
+  });
+  return box.innerHTML;
+}
+/* 偵測純文字裡用 Tab／多空格／豎線對齊的「假表格」並升格成真表格 */
+function sniffTableBlock(lines,start){
+  const block=[]; let j=start;
+  while(j<lines.length && lines[j].trim()){ block.push(lines[j]); j++; }
+  if(block.length<2) return null;
+  let splitFn=null;
+  if(block.every(l=>l.indexOf("\t")>-1)) splitFn=l=>l.split("\t");
+  else if(block.every(l=>l.indexOf("|")>-1)) splitFn=l=>{ let a=l.split("|"); if(a[0].trim()==="")a.shift(); if(a.length&&a[a.length-1].trim()==="")a.pop(); return a; };
+  else if(block.every(l=>/\S {2,}\S/.test(l))) splitFn=l=>l.split(/ {2,}/);
+  else return null;
+  const rows=block.map(l=>splitFn(l.trim()).map(c=>c.trim()));
+  const cols=rows[0].length;
+  if(cols<2 || !rows.every(r=>r.length===cols)) return null;
+  // 分隔線列（---|---）整列移除，避免變成空白資料列
+  const clean=rows.filter(r=>!r.every(c=>/^[-=:]+$/.test(c)||c===""));
+  if(clean.length<2) return null;
+  return {rows:clean,endIdx:j};
+}
+function matrixToTable(rows){
+  const head=rows[0], body=rows.slice(1);
+  return `<div class="table-wrap"><table><thead><tr>${head.map(h=>`<th>${linkifyEsc(h)}</th>`).join("")}</tr></thead>`+
+    `<tbody>${body.map(r=>`<tr>${r.map(c=>`<td>${linkifyEsc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+
 /* 純文字 → 可讀排版：逐行解析，偵測標題、項目清單、段落，保留行內換行、網址成連結 */
 function textToHTML(text){
-  const src=String(text).replace(/\r\n?/g,"\n").replace(/\t/g,"    ");
+  const src=String(text).replace(/\r\n?/g,"\n");   // 保留 Tab，供假表格偵測
   const lines=src.split("\n");
   const bulletRe=/^\s*([-*•–·]|\d+[.)、])\s+/;
   let html="", para=[], list=null, listType="ul";
@@ -666,6 +766,7 @@ function textToHTML(text){
     if(!line.trim()){ flushPara(); flushList(); continue; }
     if(bulletRe.test(line)){ flushPara(); const ordered=/^\s*\d+[.)、]/.test(line); if(!list){list=[];listType=ordered?"ol":"ul";} list.push(`<li>${linkifyEsc(line.replace(bulletRe,""))}</li>`); continue; }
     flushList();
+    if(para.length===0){ const tb=sniffTableBlock(lines,i); if(tb){ flushPara(); html+=matrixToTable(tb.rows); i=tb.endIdx-1; continue; } }
     if(para.length===0){ const lv=headingLevel(line, lines[i+1]); if(lv){ const t=line.trim(); const n=(lines[i+1]||"").trim(); if(/^={3,}$/.test(n)||/^-{3,}$/.test(n)) i++; html+=`<h${lv} id="${slug(t)}">${linkifyEsc(t)}</h${lv}>`; continue; } }
     para.push(line);
   }
@@ -674,11 +775,25 @@ function textToHTML(text){
 }
 async function docxToHTML(buf){
   if(!window.mammoth){await loadScript("https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.7.0/mammoth.browser.min.js");}
-  try{const r=await window.mammoth.convertToHtml({arrayBuffer:buf});
+  try{
+    // styleMap：把 Word 的命名樣式對到語意化 HTML（標題/副標/引用）
+    const styleMap=[
+      "p[style-name='Title'] => h1.docx-title:fresh",
+      "p[style-name='Subtitle'] => p.docx-subtitle:fresh",
+      "p[style-name='Quote'] => blockquote > p:fresh",
+      "p[style-name='Intense Quote'] => blockquote.intense > p:fresh",
+      "p[style-name='Caption'] => figcaption.docx-cap:fresh"
+    ];
+    const r=await window.mammoth.convertToHtml({arrayBuffer:buf},{styleMap});
     const box=document.createElement('div');box.innerHTML=r.value;
     box.querySelectorAll('h1,h2,h3,h4').forEach(h=>{if(!h.id)h.id=slug(h.textContent);});
+    // 移除空段落（Word 常見大量空 <p>）
+    box.querySelectorAll('p').forEach(p=>{ if(!p.textContent.trim() && !p.querySelector('img')) p.remove(); });
+    // 圖片美化 + 響應式
+    box.querySelectorAll('img').forEach(im=>{ im.classList.add('docx-img'); im.removeAttribute('width'); im.removeAttribute('height'); });
+    // 包表格供橫向捲動
     box.querySelectorAll('table').forEach(t=>{const w=document.createElement('div');w.className="table-wrap";t.parentNode.insertBefore(w,t);w.appendChild(t);});
-    return DOMPurify.sanitize(box.innerHTML,{ADD_ATTR:['id','class']});
+    return DOMPurify.sanitize(box.innerHTML,{ADD_ATTR:['id','class','src'],ADD_TAGS:['figure','figcaption']});
   }catch(e){return "<p>DOCX 解析失敗。</p>";}
 }
 function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
@@ -718,6 +833,17 @@ async function xlsxToHTML(buf){
   }catch(e){ return "<p>Excel 解析失敗："+esc(e.message||"")+"</p>"; }
 }
 
+/* 從投影片 XML 抓出 a:tbl 表格 → 二維陣列（每張投影片可能多個表格） */
+function pptSlideTables(xml){
+  return [...xml.matchAll(/<a:tbl>([\s\S]*?)<\/a:tbl>/g)].map(t=>
+    [...t[1].matchAll(/<a:tr[\s>]([\s\S]*?)<\/a:tr>/g)].map(r=>
+      [...r[1].matchAll(/<a:tc[\s>]([\s\S]*?)<\/a:tc>/g)].map(c=>{
+        const ts=[...c[1].matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map(m=>m[1]);
+        return ts.join("").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&amp;/g,"&").trim();
+      })
+    )
+  ).filter(rows=>rows.length&&rows[0].length);
+}
 async function pptxToHTML(buf){
   if(!window.JSZip){await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js").catch(()=>{});}
   if(!window.JSZip) return "<p>PPTX 函式庫載入失敗。</p>";
@@ -755,16 +881,37 @@ async function pptxToHTML(buf){
       // Fallback: no title placeholder → first body para becomes the title
       if(!titleText&&bodyParas.length){titleText=bodyParas.shift().text;}
       const title=titleText||("投影片 "+(i+1));
-      // Images
-      const rel="ppt/slides/_rels/"+name.split("/").pop()+".rels";const imgs=[];
+      // 讀該頁 rels：圖片 media + 講者備忘稿 notesSlide
+      const rel="ppt/slides/_rels/"+name.split("/").pop()+".rels";const imgs=[];let notesTarget=null;
       if(zip.files[rel]){
         const r=await zip.files[rel].async("string");
         const tgs=[...r.matchAll(/Target="([^"]*media\/[^"]+)"/g)].map(m=>m[1].replace(/^\.\.\//,"ppt/"));
         for(const tg of tgs){const f=zip.files[tg];if(f){const e=(tg.split(".").pop()||"png").toLowerCase();imgs.push(`data:image/${e==="jpg"?"jpeg":e};base64,${await f.async("base64")}`);}}
+        const nm=/Target="([^"]*notesSlide\d+\.xml)"/.exec(r); if(nm) notesTarget=nm[1].replace(/^\.\.\//,"ppt/");
       }
+      // 講者備忘稿（摺疊顯示，去掉純頁碼）
+      let notesHTML="";
+      if(notesTarget&&zip.files[notesTarget]){
+        const nx=await zip.files[notesTarget].async("string");
+        const np=[...nx.matchAll(/<a:p[\s>]([\s\S]*?)<\/a:p>/g)].map(p=>{
+          const ts=[...p[1].matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map(m=>m[1]);
+          return ts.join("").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&amp;/g,"&").trim();
+        }).filter(t=>t&&!/^\d{1,3}$/.test(t));
+        if(np.length) notesHTML='<details class="slide-notes"><summary>講者備忘稿</summary>'+np.map(t=>`<p>${esc(t)}</p>`).join("")+'</details>';
+      }
+      // 投影片內表格
+      const tableHTML=pptSlideTables(xml).map(rows=>{
+        const head=rows[0],bd=rows.slice(1);
+        return `<div class="table-wrap"><table><thead><tr>${head.map(h=>`<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${bd.map(r=>`<tr>${r.map(c=>`<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+      }).join("");
       const imgHTML=imgs.map(s=>`<img class="slide-img" src="${s}" alt="">`).join("");
       const bodyHTML=bodyParas.length?('<ul class="slide-body">'+bodyParas.map(p=>`<li class="sl${Math.min(p.lvl,3)}">${esc(p.text)}</li>`).join("")+"</ul>"):"";
-      html+=`<section class="slide-card"><div class="slide-num">${i+1} / ${names.length}</div><div class="slide-title">${esc(title)}</div>${imgHTML}${bodyHTML}</section>`;
+      const textBlock=bodyHTML+tableHTML;
+      // 圖文並存 → 雙欄；否則單欄堆疊
+      const content=(imgHTML&&textBlock)
+        ? `<div class="slide-split"><div class="slide-col-text">${textBlock}</div><div class="slide-col-img">${imgHTML}</div></div>`
+        : (imgHTML+textBlock);
+      html+=`<section class="slide-card"><div class="slide-num">${i+1} / ${names.length}</div><div class="slide-title">${esc(title)}</div>${content}${notesHTML}</section>`;
     }
     return html+"</div>";
   }catch(e){ return "<p>PPTX 解析失敗："+esc(e.message||"")+"</p>"; }
@@ -909,6 +1056,7 @@ async function renderDoc(d, assets){
   else if(d.kind==="audio"){ title=title||d.name; sub="音訊"; body=`<p><audio controls src="${d.data}" style="width:100%"></audio></p>`;}
   else if(d.kind==="video"){ title=title||d.name; sub="影片"; body=`<p><video controls src="${d.data}" style="max-width:100%;border-radius:12px;border:1px solid var(--line2)"></video></p>`;}
   else if(d.kind==="file"){ title=title||d.name; sub="附件"; body=`<p><a class="attach" href="${d.data}" download="${esc(d.name)}"><span class="att-ic">⬇</span><span class="att-meta"><span class="att-name">${esc(d.name)}</span><span class="att-size">${humanSize(d.size)} · 點擊下載</span></span></a></p>`;}
+  body=decorateTables(body);   // 數字表格自動掛上「📈 圖表」切換鈕
   return {title,sub,body};
 }
 
@@ -1157,6 +1305,15 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);line-height:1
 .doc-body tbody td{padding:12px 16px;border-bottom:1px solid var(--line);color:var(--tx2);vertical-align:top}
 .doc-body tbody tr:last-child td{border-bottom:0}.doc-body tbody tr:hover td{background:rgba(127,170,210,.05)}
 .doc-body table code{white-space:nowrap}
+.doc-body .chart-bar{margin:14px 0 0;display:flex;justify-content:flex-end}
+.doc-body .chart-toggle{font-size:12.5px;padding:6px 13px;border-radius:9px;border:1px solid var(--line2);background:color-mix(in srgb,var(--ac1) 10%,transparent);color:var(--ac1);cursor:pointer;font-family:var(--sans);transition:.18s}
+.doc-body .chart-toggle:hover{border-color:var(--ac1)}
+.doc-body .chart-toggle.on{background:color-mix(in srgb,var(--ac1) 22%,transparent)}
+.doc-body .chart-box{margin:12px 0 22px;padding:18px 16px 10px;border:1px solid var(--line2);border-radius:14px;background:var(--panel)}
+.doc-body .chart-legend{display:flex;flex-wrap:wrap;gap:14px;justify-content:center;margin-bottom:10px;font-size:12px;color:var(--tx2)}
+.doc-body .chart-leg{display:inline-flex;align-items:center;gap:6px}
+.doc-body .chart-leg i{width:14px;height:3px;border-radius:2px;display:inline-block}
+.doc-body .chart-svg{width:100%;height:auto;display:block}
 .doc-body :not(pre)>code{font-family:var(--mono);font-size:.86em;padding:2px 7px;border-radius:6px;background:color-mix(in srgb,var(--tx) 10%,transparent);color:var(--em);border:1px solid var(--line)}
 .doc-body pre{margin:20px 0;border-radius:14px;border:1px solid var(--line2);overflow:hidden;background:var(--code-bg);box-shadow:0 14px 40px rgba(0,0,0,.3)}
 .doc-body pre::before{content:"";display:block;height:38px;border-bottom:1px solid var(--line);background-color:rgba(127,170,210,.05);background-image:radial-gradient(circle 5px at 20px 19px,#ff6f6f 99%,transparent),radial-gradient(circle 5px at 40px 19px,#ffcf5e 99%,transparent),radial-gradient(circle 5px at 60px 19px,#5fe3a0 99%,transparent);background-repeat:no-repeat}
@@ -1182,6 +1339,20 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);line-height:1
 .doc-body .slide-card li{margin:9px 0;color:var(--tx2);font-size:15.5px}
 .doc-body .slide-body{margin:6px 0 0;padding-left:18px}.doc-body .slide-body li{margin:8px 0;font-size:15.5px;color:var(--tx2)}
 .doc-body .slide-body .sl1{margin-left:18px;font-size:14.5px;color:var(--tx3)}.doc-body .slide-body .sl2{margin-left:36px;font-size:13.5px;color:var(--tx3);opacity:.85}.doc-body .slide-body .sl3{margin-left:54px;font-size:12.5px;color:var(--tx3);opacity:.7}
+.doc-body .slide-split{display:grid;grid-template-columns:1fr minmax(180px,42%);gap:24px;align-items:start}
+.doc-body .slide-split .slide-col-img{display:flex;flex-direction:column;gap:12px}
+.doc-body .slide-split .slide-col-img .slide-img{margin:0}
+.doc-body .slide-notes{margin:18px 0 0;border-top:1px dashed var(--line2);padding-top:12px}
+.doc-body .slide-notes summary{cursor:pointer;font-size:12.5px;color:var(--tx3);letter-spacing:.06em;user-select:none}
+.doc-body .slide-notes summary:hover{color:var(--ac1)}
+.doc-body .slide-notes p{font-size:13.5px;color:var(--tx2);margin:8px 0 0}
+.doc-body .slide-card .table-wrap{margin:12px 0}
+@media(max-width:640px){.doc-body .slide-split{grid-template-columns:1fr}}
+.doc-body .docx-title{font-family:var(--serif);font-weight:800;font-size:clamp(26px,4vw,38px);line-height:1.15;margin:8px 0 4px}
+.doc-body .docx-subtitle{font-size:17px;color:var(--tx2);font-weight:300;margin:0 0 18px}
+.doc-body .docx-img{max-width:100%;height:auto;border-radius:12px;border:1px solid var(--line2);margin:16px 0;display:block}
+.doc-body figcaption.docx-cap{font-size:12.5px;color:var(--tx3);text-align:center;margin:6px 0 16px}
+.doc-body blockquote.intense{border-left-width:4px;font-style:italic;font-size:1.05em}
 .doc-body .pdf-pages{display:flex;flex-direction:column;gap:20px;margin:8px 0}
 .doc-body .pdf-page{margin:0}
 .doc-body .pdf-page img{width:100%;display:block;border-radius:12px;border:1px solid var(--line2);box-shadow:0 12px 34px rgba(0,0,0,.24)}
@@ -1262,6 +1433,7 @@ sc.addEventListener('click',cm);
 var PB=document.getElementById('pbar');
 function prog(){if(!PB)return;var h=document.documentElement,sh=h.scrollHeight-h.clientHeight;PB.style.width=(sh>0?(h.scrollTop/sh*100):0)+'%';}
 document.querySelectorAll('.doc-body pre').forEach(function(pre){var b=document.createElement('button');b.className='copybtn';b.textContent='複製';b.addEventListener('click',function(){var c=pre.querySelector('code');var tx=c?c.innerText:pre.innerText;if(navigator.clipboard)navigator.clipboard.writeText(tx).then(function(){b.textContent='已複製';setTimeout(function(){b.textContent='複製';},1400);});});pre.appendChild(b);});
+document.querySelectorAll('.chart-toggle').forEach(function(b){b.addEventListener('click',function(){var c=document.getElementById(this.getAttribute('data-chart'));if(!c)return;var willOpen=c.hidden;c.hidden=!willOpen;this.classList.toggle('on',willOpen);this.textContent=willOpen?'📈 收合圖表':'📈 圖表';});});
 window.addEventListener('scroll',function(){prog();
   if(TT)TT.classList.toggle('show',(document.documentElement.scrollTop||document.body.scrollTop||window.scrollY)>400);
   if(MODE==='scroll'){var secs=document.querySelectorAll('.doc'),cur=null;secs.forEach(function(s){if(s.getBoundingClientRect().top<160)cur=s;});if(cur)setActive(cur.id.slice(4));}
