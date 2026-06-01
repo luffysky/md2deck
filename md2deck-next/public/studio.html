@@ -99,8 +99,8 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);min-height:10
 .k-csv{background:rgba(246,193,119,.18);color:var(--amber)}
 .k-json{background:rgba(255,141,122,.16);color:var(--coral)}
 .k-img{background:rgba(180,160,255,.16);color:#b9a9ff}
-.k-txt,.k-docx,.k-pdf,.k-ipynb,.k-audio,.k-video,.k-file,.k-pptx,.k-xlsx{background:rgba(170,184,204,.14);color:var(--tx2)}
-.k-docx{color:#7aa7ff!important}.k-pptx{color:#ff9d6c!important}.k-xlsx{color:#5fe3a0!important}
+.k-txt,.k-docx,.k-pdf,.k-ipynb,.k-audio,.k-video,.k-file,.k-pptx,.k-xlsx,.k-odt,.k-ods,.k-odp,.k-rtf,.k-epub{background:rgba(170,184,204,.14);color:var(--tx2)}
+.k-docx,.k-odt{color:#7aa7ff!important}.k-pptx,.k-odp{color:#ff9d6c!important}.k-xlsx,.k-ods{color:#5fe3a0!important}.k-epub{color:#c9a9ff!important}
 .fmeta{flex:1;min-width:0}
 .fname{font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fgroup{font-size:11px;color:var(--tx3);margin-top:2px}
@@ -396,6 +396,11 @@ const kindOf = ext => ext==="md"||ext==="markdown" ? "md"
   : ext==="docx" ? "docx"
   : ext==="pptx" ? "pptx"
   : ext==="xlsx"||ext==="xls" ? "xlsx"
+  : ext==="odt" ? "odt"
+  : ext==="ods" ? "ods"
+  : ext==="odp" ? "odp"
+  : ext==="rtf" ? "rtf"
+  : ext==="epub" ? "epub"
   : ext==="pdf" ? "pdf"
   : ext==="ipynb" ? "ipynb"
   : IMG_EXT.includes(ext) ? "img"
@@ -458,7 +463,7 @@ function _addFiles(fileList){
       if(--pending===0) finish();
     };
     reader.onerror = ()=>{ if(--pending===0) finish(); };
-    if(kind==="docx"||kind==="pdf"||kind==="pptx"||kind==="xlsx") reader.readAsArrayBuffer(f);
+    if(kind==="docx"||kind==="pdf"||kind==="pptx"||kind==="xlsx"||kind==="odt"||kind==="ods"||kind==="odp"||kind==="epub") reader.readAsArrayBuffer(f);
     else if(isDataKind(kind)) reader.readAsDataURL(f);
     else reader.readAsText(f);
   });
@@ -483,7 +488,7 @@ function renderList(){
   docs.forEach((d,i)=>{
     const row=document.createElement('div'); row.className="fitem"+(d.include?"":" off");
     row.draggable=true; row.dataset.idx=i;
-    const klabel={md:"MD",code:d.ext.toUpperCase().slice(0,4),csv:"CSV",json:"JSON",txt:"TXT",img:"IMG",docx:"DOCX",pptx:"PPT",xlsx:"XLS",pdf:"PDF",ipynb:"IPYNB",audio:"♪",video:"▶",file:"檔"}[d.kind];
+    const klabel={md:"MD",code:d.ext.toUpperCase().slice(0,4),csv:"CSV",json:"JSON",txt:"TXT",img:"IMG",docx:"DOCX",pptx:"PPT",xlsx:"XLS",odt:"ODT",ods:"ODS",odp:"ODP",rtf:"RTF",epub:"EPUB",pdf:"PDF",ipynb:"IPYNB",audio:"♪",video:"▶",file:"檔"}[d.kind];
     const tag = isDataKind(d.kind)&&d.referenced ? '內嵌素材' : ('組：');
     const grpField = d.kind==="img"&&d.referenced
       ? `<span style="color:var(--ice)">⤵ 內嵌進引用它的頁面</span>`
@@ -999,6 +1004,140 @@ async function pptxToHTML(buf){
   }catch(e){ return "<p>PPTX 解析失敗："+esc(e.message||"")+"</p>"; }
 }
 
+/* ============ OpenDocument（ODT / ODS / ODP）============ */
+const JSZIP_CDN="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+function odfInline(node){
+  let out="";
+  node.childNodes.forEach(n=>{
+    if(n.nodeType===3) out+=esc(n.nodeValue);
+    else if(n.nodeType===1){
+      const ln=n.localName;
+      if(ln==="line-break") out+="<br>";
+      else if(ln==="tab") out+=" ";
+      else if(ln==="s"){ const c=+(n.getAttribute("text:c")||1)||1; out+=" ".repeat(c); }
+      else if(ln==="a"){ const href=n.getAttribute("xlink:href")||""; out+=`<a href="${esc(href)}" target="_blank" rel="noopener">${odfInline(n)}</a>`; }
+      else out+=odfInline(n);
+    }
+  });
+  return out;
+}
+function odfList(node){
+  const items=[...node.children].filter(c=>c.localName==="list-item");
+  return "<ul>"+items.map(li=>{ let inner=""; [...li.children].forEach(c=>{ if(c.localName==="list") inner+=odfList(c); else inner+=odfInline(c); }); return `<li>${inner}</li>`; }).join("")+"</ul>";
+}
+function odfTable(node){
+  const rows=[];
+  const collect=el=>[...el.children].forEach(c=>{ if(c.localName==="table-row") rows.push(c); else if(c.localName==="table-header-rows"||c.localName==="table-row-group") collect(c); });
+  collect(node);
+  if(!rows.length) return "";
+  const cellsOf=r=>{ const out=[]; [...r.children].forEach(c=>{ if(c.localName!=="table-cell") return; const span=Math.min(20,+(c.getAttribute("table:number-columns-spanned")||1)||1); const tx=[...c.children].map(odfInline).join(" ").replace(/\s+/g," ").trim(); out.push({tx,span}); }); return out; };
+  let mat=rows.map(cellsOf);
+  // 去掉尾端全空白列（ODS 常見），上限 400 列
+  while(mat.length && mat[mat.length-1].every(c=>!c.tx)) mat.pop();
+  if(mat.length>401) mat=mat.slice(0,401);
+  if(!mat.length) return "";
+  const head=mat[0], body=mat.slice(1);
+  const cell=(c,tag)=>`<${tag}${c.span>1?` colspan="${c.span}"`:""}>${c.tx}</${tag}>`;
+  return `<div class="table-wrap"><table><thead><tr>${head.map(c=>cell(c,"th")).join("")}</tr></thead>`+
+    `<tbody>${body.map(r=>`<tr>${r.map(c=>cell(c,"td")).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+function odfFlow(root){
+  let out="";
+  const walk=node=>{ [...node.childNodes].forEach(n=>{ if(n.nodeType!==1) return; const ln=n.localName;
+    if(ln==="h"){ const lvl=Math.min(4,+(n.getAttribute("text:outline-level")||1)||1); const tx=odfInline(n); if(tx.trim()) out+=`<h${lvl} id="${slug(n.textContent)}">${tx}</h${lvl}>`; }
+    else if(ln==="p"){ const tx=odfInline(n); if(tx.trim()) out+=`<p>${tx}</p>`; }
+    else if(ln==="list") out+=odfList(n);
+    else if(ln==="table") out+=odfTable(n);
+    else walk(n); }); };
+  walk(root); return out;
+}
+function odfSheets(doc){
+  const tables=[...doc.getElementsByTagName("*")].filter(e=>e.localName==="table"&&e.parentNode&&e.parentNode.localName==="spreadsheet");
+  let out=""; tables.forEach(t=>{ const name=t.getAttribute("table:name")||"工作表"; const tb=odfTable(t); if(tb) out+=`<h2 id="${slug(name)}">${esc(name)}</h2>${tb}`; });
+  return out;
+}
+function odfSlides(doc){
+  const pages=[...doc.getElementsByTagName("*")].filter(e=>e.localName==="page"&&e.parentNode&&e.parentNode.localName==="presentation");
+  if(!pages.length) return odfFlow(doc.documentElement);
+  let html='<div class="slides">';
+  pages.forEach((pg,i)=>{
+    const paras=[...pg.getElementsByTagName("*")].filter(e=>e.localName==="p"||e.localName==="h").map(odfInline).filter(s=>s.trim());
+    const title=paras[0]||(pg.getAttribute("draw:name")||("投影片 "+(i+1)));
+    const rest=paras.slice(1);
+    const body=rest.length?('<ul class="slide-body">'+rest.map(t=>`<li>${t}</li>`).join("")+"</ul>"):"";
+    html+=`<section class="slide-card"><div class="slide-num">${i+1} / ${pages.length}</div><div class="slide-title">${title}</div>${body}</section>`;
+  });
+  return html+"</div>";
+}
+async function odfToHTML(buf, mode){
+  if(!window.JSZip){await loadScript(JSZIP_CDN).catch(()=>{});}
+  if(!window.JSZip) return "<p>OpenDocument 函式庫載入失敗。</p>";
+  try{
+    const zip=await JSZip.loadAsync(buf);
+    const f=zip.files["content.xml"]; if(!f) return "<p>找不到 content.xml。</p>";
+    const doc=new DOMParser().parseFromString(await f.async("string"),"application/xml");
+    let html = mode==="sheet"?odfSheets(doc) : mode==="slides"?odfSlides(doc) : odfFlow(doc.documentElement);
+    return DOMPurify.sanitize(html||"<p>（空文件）</p>",{ADD_ATTR:["id","class","colspan","rowspan"]});
+  }catch(e){ return "<p>OpenDocument 解析失敗："+esc(e.message||"")+"</p>"; }
+}
+
+/* ============ RTF（基本：抽純文字後交給 textToHTML 排版）============ */
+function rtfToHTML(rtf){
+  if(typeof rtf!=="string"||!/^\s*[{]?\\?rtf|\\rtf/.test(rtf.slice(0,40))&&rtf.indexOf("\\")<0) { /* 仍嘗試 */ }
+  let s=String(rtf);
+  s=s.replace(/\{(?:\\\*)?\\(fonttbl|colortbl|stylesheet|info|generator|pict|object|themedata|colorschememapping)[\s\S]*?\}/gi," ");
+  s=s.replace(/\\u(-?\d+)\??/g,(m,n)=>{ n=+n; if(n<0)n+=65536; return String.fromCharCode(n); });
+  s=s.replace(/\\'([0-9a-fA-F]{2})/g,(m,h)=>String.fromCharCode(parseInt(h,16)));
+  s=s.replace(/\\par[d]?\b/gi,"\n\n").replace(/\\line\b/gi,"\n").replace(/\\tab\b/gi,"\t");
+  s=s.replace(/\\[a-zA-Z]+-?\d* ?/g,"").replace(/\\[^a-zA-Z]/g,"").replace(/[{}]/g,"");
+  s=s.replace(/\r/g,"").replace(/\n{3,}/g,"\n\n");
+  s=s.trim();
+  return s?textToHTML(s):"<p>（空文件）</p>";
+}
+
+/* ============ EPUB（依 spine 串接各章 XHTML；圖片內嵌）============ */
+function epubResolve(baseDir, href){
+  let p=(baseDir||"")+href.replace(/^\.\//,"");
+  const parts=[]; p.split("/").forEach(seg=>{ if(seg==="..") parts.pop(); else if(seg!=="."&&seg!=="") parts.push(seg); });
+  return parts.join("/");
+}
+async function epubToHTML(buf){
+  if(!window.JSZip){await loadScript(JSZIP_CDN).catch(()=>{});}
+  if(!window.JSZip) return "<p>EPUB 函式庫載入失敗。</p>";
+  try{
+    const zip=await JSZip.loadAsync(buf);
+    const cont=zip.files["META-INF/container.xml"]?await zip.files["META-INF/container.xml"].async("string"):"";
+    let opfPath=(cont.match(/full-path="([^"]+\.opf)"/)||[])[1] || Object.keys(zip.files).find(n=>/\.opf$/i.test(n));
+    if(!opfPath) return "<p>找不到 EPUB OPF。</p>";
+    const baseDir=opfPath.indexOf("/")>=0?opfPath.slice(0,opfPath.lastIndexOf("/")+1):"";
+    const doc=new DOMParser().parseFromString(await zip.files[opfPath].async("string"),"application/xml");
+    const manifest={};
+    [...doc.getElementsByTagName("*")].filter(e=>e.localName==="item").forEach(it=>{ manifest[it.getAttribute("id")]={href:it.getAttribute("href"),type:it.getAttribute("media-type")||""}; });
+    const spine=[...doc.getElementsByTagName("*")].filter(e=>e.localName==="itemref").map(ir=>ir.getAttribute("idref"));
+    const order=spine.length?spine:Object.keys(manifest);
+    let out="",count=0;
+    for(const id of order){
+      const it=manifest[id]; if(!it||!/x?html|xml/i.test(it.type)) continue;
+      const path=epubResolve(baseDir,it.href); const f=zip.files[path]||zip.files[decodeURIComponent(path)]; if(!f) continue;
+      let xhtml=await f.async("string");
+      const bodyM=xhtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+      let chunk=(bodyM?bodyM[1]:xhtml).replace(/<script[\s\S]*?<\/script>/gi,"").replace(/<style[\s\S]*?<\/style>/gi,"");
+      // 內嵌圖片
+      const chDir=path.indexOf("/")>=0?path.slice(0,path.lastIndexOf("/")+1):"";
+      const imgs=[...chunk.matchAll(/<img[^>]*\ssrc=["']([^"']+)["']/gi)].map(m=>m[1]);
+      for(const src of imgs){ if(/^(https?:|data:)/i.test(src)) continue; const ip=epubResolve(chDir,src); const imgF=zip.files[ip]||zip.files[decodeURIComponent(ip)]; if(!imgF) continue;
+        const ext=(ip.split(".").pop()||"png").toLowerCase(); const b64=await imgF.async("base64");
+        const uri=`data:image/${ext==="jpg"?"jpeg":ext};base64,${b64}`;
+        chunk=chunk.split('"'+src+'"').join('"'+uri+'"').split("'"+src+"'").join("'"+uri+"'");
+      }
+      out+=`<section class="epub-chapter">${chunk}</section>`; count++;
+      if(count>=400) break;
+    }
+    if(!out) return "<p>EPUB 沒有可顯示的章節。</p>";
+    return DOMPurify.sanitize(out,{ADD_ATTR:["id","class","src","alt"]});
+  }catch(e){ return "<p>EPUB 解析失敗："+esc(e.message||"")+"</p>"; }
+}
+
 async function ensurePdf(){
   if(window.pdfjsLib) return window._pdfBase||"";
   // 先試自架（部署站台 /vendor/pdf），失敗再退回 CDN
@@ -1153,6 +1292,11 @@ async function renderDoc(d, assets){
   else if(d.kind==="docx"){ title=title||d.name.replace(/\.docx$/i,""); sub="Word 文件"; body=await docxToHTML(d.data);}
   else if(d.kind==="pptx"){ title=title||d.name.replace(/\.pptx$/i,""); sub="PowerPoint 簡報"; body=await pptxToHTML(d.data);}
   else if(d.kind==="xlsx"){ title=title||d.name.replace(/\.(xlsx|xls)$/i,""); sub="Excel 試算表"; body=await xlsxToHTML(d.data);}
+  else if(d.kind==="odt"){ title=title||d.name.replace(/\.odt$/i,""); sub="OpenDocument 文件"; body=await odfToHTML(d.data,"text");}
+  else if(d.kind==="ods"){ title=title||d.name.replace(/\.ods$/i,""); sub="OpenDocument 試算表"; body=await odfToHTML(d.data,"sheet");}
+  else if(d.kind==="odp"){ title=title||d.name.replace(/\.odp$/i,""); sub="OpenDocument 簡報"; body=await odfToHTML(d.data,"slides");}
+  else if(d.kind==="rtf"){ title=title||d.name.replace(/\.rtf$/i,""); sub="RTF 文件"; body=rtfToHTML(d.data);}
+  else if(d.kind==="epub"){ title=title||d.name.replace(/\.epub$/i,""); sub="EPUB 電子書"; body=await epubToHTML(d.data);}
   else if(d.kind==="pdf"){ title=title||d.name.replace(/\.pdf$/i,""); sub=($('#pdfImgTog')&&$('#pdfImgTog').checked)?"PDF（圖像 · 含版面與圖片）":"PDF（文字擷取）"; body=await pdfToHTML(d.data);}
   else if(d.kind==="ipynb"){ title=title||d.name.replace(/\.ipynb$/i,""); sub="Jupyter Notebook"; body=await ipynbToHTML(d.data,assets);}
   else if(d.kind==="audio"){ title=title||d.name; sub="音訊"; body=`<p><audio controls src="${d.data}" style="width:100%"></audio></p>`;}
@@ -1419,6 +1563,8 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);line-height:1
 .doc-body .chart-svg{width:100%;height:auto;display:block}
 .doc-body .chart-explicit{margin:22px 0}
 .doc-body .chart-cap{text-align:center;font-family:var(--serif);font-weight:700;font-size:15px;color:var(--tx);margin-bottom:6px}
+.doc-body .epub-chapter{padding-bottom:8px}.doc-body .epub-chapter+.epub-chapter{margin-top:30px;padding-top:30px;border-top:1px solid var(--line)}
+.doc-body .epub-chapter img{max-width:100%;height:auto;border-radius:10px}
 .doc-body .uhl{background:linear-gradient(transparent 55%,color-mix(in srgb,var(--ac1) 42%,transparent) 0);color:inherit;border-radius:2px;padding:0 1px;cursor:pointer}
 .doc-body .uhl.has-note{border-bottom:2px dotted var(--ac1)}
 .hlbar{position:absolute;z-index:60;display:flex;gap:2px;background:var(--code-bg);border:1px solid var(--line2);border-radius:11px;padding:4px;box-shadow:0 12px 34px rgba(0,0,0,.42)}

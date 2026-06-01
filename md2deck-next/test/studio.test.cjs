@@ -56,18 +56,39 @@ const linkifyEsc = esc;
 const slug = s => String(s).toLowerCase().replace(/\s+/g, '-');
 const isTextKind = k => ['md', 'csv', 'json', 'txt', 'code'].includes(k);
 
+// 會跳過字串／樣板／正則／註解的括號配對器：
+// 既能處理一行式函式（occOf），也不會被正則裡的 { }（rtfToHTML）騙到。
 function grab(name) {
-  const re = new RegExp('function ' + name + '\\(', 'g');
-  const m = re.exec(html);
+  const m = new RegExp('(^|\\n)function ' + name + '\\(').exec(html);
   if (!m) throw new Error('找不到函式 ' + name);
-  let i = html.indexOf('{', m.index), depth = 0, start = m.index;
-  for (; i < html.length; i++) { if (html[i] === '{') depth++; else if (html[i] === '}') { depth--; if (depth === 0) return html.slice(start, i + 1); } }
+  const start = m.index + (m[1] ? 1 : 0);
+  let i = html.indexOf('{', start), depth = 0, st = null, prev = '';
+  for (; i < html.length; i++) {
+    const c = html[i], n = html[i + 1];
+    if (st) {
+      if (st === '/*') { if (c === '*' && n === '/') { st = null; i++; } continue; }
+      if (st === '//') { if (c === '\n') st = null; continue; }
+      if (st === 're') { if (c === '\\') { i++; continue; } if (c === '/') st = null; continue; }
+      if (c === '\\') { i++; continue; }
+      if (c === st) st = null;
+      continue;
+    }
+    if (c === '/' && n === '*') { st = '/*'; i++; continue; }
+    if (c === '/' && n === '/') { st = '//'; i++; continue; }
+    if (c === '"' || c === "'" || c === '`') { st = c; continue; }
+    if (c === '/' && (/[=(,:!&|?{;[]/.test(prev) || prev === '')) { st = 're'; continue; }
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (depth === 0) return html.slice(start, i + 1); }
+    if (!/\s/.test(c)) prev = c;
+  }
   throw new Error('括號不平衡 ' + name);
 }
+global.DOMParser = _win.DOMParser;
 const SERIES_UNIT_DECL = html.match(/const SERIES_UNIT=[^;]+;/)[0];
 const FUNCS = ['parseNum', 'fmtNum', 'escSVG', 'pickChartType', 'tableToMatrix', 'buildChartSVG',
   'parseChartBlock', 'explicitChartHTML', 'decorateTables', 'sniffTableBlock', 'sniffSeriesBlock',
-  'matrixToTable', 'textToHTML', 'pptSlideTables', 'hashStr'];
+  'matrixToTable', 'textToHTML', 'pptSlideTables', 'hashStr',
+  'odfInline', 'odfList', 'odfTable', 'odfFlow', 'odfSheets', 'odfSlides', 'rtfToHTML', 'epubResolve'];
 eval(SERIES_UNIT_DECL + '\n' + FUNCS.map(grab).join('\n'));
 
 section('parseNum（含單位 / 會計負數 / 拒絕散文）');
@@ -150,6 +171,58 @@ eval(grab('occOf') + '\n' + grab('wrapOcc'));
   const occ = occOf(b3, r3, 'ab'); const wm = wrapOcc(b3, 'ab', occ, '');
   ok('occOf↔wrapOcc round-trip', occ === 1 && wm.previousSibling && /cd $/.test(wm.previousSibling.nodeValue));
 })();
+
+section('OpenDocument（ODT / ODS / ODP）');
+const ODF_NS = 'xmlns:text="urn:t" xmlns:table="urn:tb" xmlns:office="urn:o" xmlns:draw="urn:d" xmlns:presentation="urn:p"';
+(function () {
+  // ODT flow：標題 + 段落 + 清單 + 表格
+  const odtXml = `<office:document-content ${ODF_NS}><office:body><office:text>` +
+    '<text:h text:outline-level="1">章節標題</text:h>' +
+    '<text:p>一段內文。</text:p>' +
+    '<text:list><text:list-item><text:p>項目甲</text:p></text:list-item><text:list-item><text:p>項目乙</text:p></text:list-item></text:list>' +
+    '<table:table><table:table-row><table:table-cell><text:p>月份</text:p></table:table-cell><table:table-cell><text:p>雨量</text:p></table:table-cell></table:table-row>' +
+    '<table:table-row><table:table-cell><text:p>1月</text:p></table:table-cell><table:table-cell><text:p>120</text:p></table:table-cell></table:table-row>' +
+    '<table:table-row><table:table-cell><text:p>2月</text:p></table:table-cell><table:table-cell><text:p>95</text:p></table:table-cell></table:table-row></table:table>' +
+    '</office:text></office:body></office:document-content>';
+  const odoc = new DOMParser().parseFromString(odtXml, 'application/xml');
+  const oh = odfFlow(odoc.documentElement);
+  ok('ODT 標題 → <h1>', /<h1[^>]*>章節標題<\/h1>/.test(oh));
+  ok('ODT 段落 → <p>', oh.includes('<p>一段內文。</p>'));
+  ok('ODT 清單 → <ul><li>', oh.includes('<li>項目甲</li>') && oh.includes('<ul>'));
+  ok('ODT 表格 → <table>', oh.includes('<table>') && oh.includes('<th>月份</th>'));
+  ok('ODT 數字表格可被 decorateTables 出圖', decorateTables(oh).includes('chart-toggle'));
+
+  // ODS sheets
+  const odsXml = `<office:document-content ${ODF_NS}><office:body><office:spreadsheet>` +
+    '<table:table table:name="Q1"><table:table-row><table:table-cell><text:p>項目</text:p></table:table-cell><table:table-cell><text:p>值</text:p></table:table-cell></table:table-row>' +
+    '<table:table-row><table:table-cell><text:p>A</text:p></table:table-cell><table:table-cell><text:p>10</text:p></table:table-cell></table:table-row></table:table>' +
+    '</office:spreadsheet></office:body></office:document-content>';
+  const sdoc = new DOMParser().parseFromString(odsXml, 'application/xml');
+  const sh = odfSheets(sdoc);
+  ok('ODS 工作表名 → <h2>', sh.includes('<h2') && sh.includes('Q1'));
+  ok('ODS 內容 → <table>', sh.includes('<table>') && sh.includes('<th>項目</th>'));
+
+  // ODP slides
+  const odpXml = `<office:document-content ${ODF_NS}><office:body><office:presentation>` +
+    '<draw:page draw:name="第一頁"><text:p>投影片標題</text:p><text:p>要點一</text:p><text:p>要點二</text:p></draw:page>' +
+    '</office:presentation></office:body></office:document-content>';
+  const pdoc = new DOMParser().parseFromString(odpXml, 'application/xml');
+  const ph = odfSlides(pdoc);
+  ok('ODP → slide-card', ph.includes('slide-card') && ph.includes('投影片標題'));
+  ok('ODP 要點 → slide-body li', ph.includes('<li>要點一</li>'));
+})();
+
+section('RTF');
+const rh = rtfToHTML('{\\rtf1\\ansi {\\fonttbl\\f0 Arial;}\\f0\\fs24 第一段。\\par 第二段。\\par}');
+ok('RTF → 兩段 <p>', (rh.match(/<p>/g) || []).length >= 2 && rh.includes('第一段') && rh.includes('第二段'));
+ok('RTF 去除字型表', !rh.includes('fonttbl') && !rh.includes('Arial'));
+const runi = rtfToHTML('\\u26085?\\u26412? text');
+ok('RTF unicode \\uN', runi.includes('日') && runi.includes('本'));
+
+section('EPUB 路徑解析');
+ok('epubResolve 同層', epubResolve('OEBPS/', 'ch1.xhtml') === 'OEBPS/ch1.xhtml');
+ok('epubResolve ../', epubResolve('OEBPS/text/', '../images/a.png') === 'OEBPS/images/a.png');
+ok('epubResolve ./', epubResolve('OEBPS/', './ch2.xhtml') === 'OEBPS/ch2.xhtml');
 
 /* ---------- 結果 ---------- */
 console.log('\n' + (fails ? ('❌ ' + fails + ' 項失敗') : '✅ 全部通過'));
