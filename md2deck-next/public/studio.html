@@ -1121,6 +1121,26 @@ function partsToTree(parts){
   return root;
 }
 
+/* ============ 渲染快取 ============ */
+/* renderDoc 是即時預覽最貴的一步（每次全量重跑 marked/mammoth/xlsx/pdf）。
+   用「內容雜湊 + 影響渲染的設定」當 key 快取結果，沒變的檔直接拿快取。 */
+let _renderCache=new Map();
+function hashStr(s){ s=String(s); let h=0x811c9dc5; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,0x01000193); } return (h>>>0).toString(36); }
+function assetSig(){ return docs.filter(d=>isDataKind(d.kind)).map(d=>d.id+":"+(d.size||0)).join(","); }
+async function renderDocCached(d, assets){
+  // 只有可編輯的文字類會原地變動 → 雜湊內容；其餘(媒體/二進位)用 id+size 即可，免得每次雜湊大字串
+  const dataSig = isTextKind(d.kind) ? ("h"+hashStr(d.data)) : ("s"+(d.size||(typeof d.data==="string"?d.data.length:0)));
+  const tog = ($('#mermaidTog').checked?1:0)+"|"+($('#mathTog').checked?1:0)+"|"+(($('#pdfImgTog')&&$('#pdfImgTog').checked)?1:0);
+  // md/ipynb 會內嵌引用的素材，需把素材簽章納入 key；其餘檔不受素材影響
+  const aSig = (d.kind==="md"||d.kind==="ipynb") ? assetSig() : "";
+  const key = [d.id,d.kind,d.ext,d.lang||"",d.title||"",d.name,dataSig,tog,aSig].join("");
+  const hit=_renderCache.get(key); if(hit) return hit;
+  const r=await renderDoc(d, assets);
+  if(_renderCache.size>200) _renderCache.clear();   // 軟上限，避免長 session 無限長
+  _renderCache.set(key,r);
+  return r;
+}
+
 /* ============ 組 deck ============ */
 async function renderDoc(d, assets){
   let title=d.title||"", sub="", body="";
@@ -1189,7 +1209,7 @@ async function buildDeck(){
     for(const g of order){
       let inner="";const icon=ICONS[gi++%ICONS.length];
       for(const d of groups[g]){
-        const r=await renderDoc(d, assets);
+        const r=await renderDocCached(d, assets);
         _pd++; setProg(_pd,_pt);
         const fileTitle=r.title;
         let parts=splitDoc(r.body, splitDepth);
@@ -1217,7 +1237,7 @@ async function buildDeck(){
     for(const g of order){
       let links="";const icon=ICONS[gi++%ICONS.length];
       for(const d of groups[g]){
-        const r=await renderDoc(d, assets); const did="d"+ids.length; ids.push(did);
+        const r=await renderDocCached(d, assets); const did="d"+ids.length; ids.push(did);
         _pd++; setProg(_pd,_pt);
         sections+=pageSection(did,r.title,g,r.sub,r.body);
         links+=`<button class="nav-item" data-doc="${did}"><span class="nav-icon">${icon}</span><span class="nav-text"><span class="nav-title">${esc(r.title)}</span></span></button>`;
@@ -1700,7 +1720,7 @@ function dl(blob,name){const a=document.createElement('a');a.href=URL.createObje
 async function renderAll(){
   const inc=docs.filter(d=>d.include); if(!inc.length) return null;
   const assets={}; docs.filter(d=>isDataKind(d.kind)).forEach(d=>{assets[normPath(d.relpath||d.name)]=d.data;assets[baseName(d.name)]=d.data;});
-  const out=[]; for(const d of inc){ const r=await renderDoc(d,assets); out.push({title:r.title,sub:r.sub,group:d.group,body:r.body}); }
+  const out=[]; for(const d of inc){ const r=await renderDocCached(d,assets); out.push({title:r.title,sub:r.sub,group:d.group,body:r.body}); }
   return out;
 }
 function xhtmlOf(bodyHTML){
