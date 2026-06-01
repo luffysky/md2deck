@@ -1665,6 +1665,12 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);line-height:1
 .cc-t{display:block;font-size:16px;color:var(--tx);margin-top:7px;font-family:var(--serif);font-weight:700}
 ${tokenCSS}
 @keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+/* 無障礙：跳過連結、鍵盤焦點外框、降低動態 */
+.skip{position:fixed;left:8px;top:-60px;z-index:100;background:var(--ac1);color:#04121a;padding:9px 16px;border-radius:10px;font-weight:700;text-decoration:none;transition:top .2s}
+.skip:focus{top:8px}
+a:focus-visible,button:focus-visible,.nav-item:focus-visible,[tabindex]:focus-visible,summary:focus-visible{outline:2px solid var(--ac1);outline-offset:2px;border-radius:6px}
+#mainwrap:focus{outline:none}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
 @media(max-width:1080px){.doc-grid{grid-template-columns:1fr}.doc-toc{display:none}}
 @media(max-width:860px){:root{--sb:280px}.sidebar{transform:translateX(-100%);transition:.3s;box-shadow:0 0 60px rgba(0,0,0,.6)}.sidebar.open{transform:none}.main{margin-left:0}.menu-toggle{display:block}.wrap{padding:30px 18px 100px}.topbar{padding:14px 16px}.doc-body,.doc-body p,.doc-body li{font-size:15.5px}.doc-body pre{max-width:100%}.doc-body :not(pre)>code{word-break:break-word}#pbar{left:0}.scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:25;opacity:0;pointer-events:none;transition:.3s}.scrim.show{opacity:1;pointer-events:auto}}
 @media print{.sidebar,.topbar,.doc-toc,.bg,.menu-toggle{display:none!important}.main{margin:0}.wrap{max-width:none;padding:0}.doc[hidden]{display:none}.doc-grid{grid-template-columns:1fr}}`;
@@ -1731,14 +1737,15 @@ document.querySelectorAll('.doc-body h1[id],.doc-body h2[id],.doc-body h3[id],.d
   a.textContent='✓';setTimeout(function(){a.textContent='¶';},1200);});
  h.insertBefore(a,h.firstChild);});
 /* 圖片點擊放大 */
-var LB=document.getElementById('lbox'),LBI=LB?LB.querySelector('img'):null;
-if(LB){document.addEventListener('click',function(e){var im=e.target.closest('.doc-body img');if(im&&!e.target.closest('a')){LBI.src=im.currentSrc||im.src;LB.classList.add('show');}});
- LB.addEventListener('click',function(){LB.classList.remove('show');LBI.src='';});}
+var LB=document.getElementById('lbox'),LBI=LB?LB.querySelector('img'):null,_lbPrev=null;
+function closeLB(){if(!LB)return;LB.classList.remove('show');LBI.src='';if(_lbPrev&&_lbPrev.focus){_lbPrev.focus();_lbPrev=null;}}
+if(LB){document.addEventListener('click',function(e){var im=e.target.closest('.doc-body img');if(im&&!e.target.closest('a')){_lbPrev=document.activeElement;LBI.src=im.currentSrc||im.src;LBI.alt=im.alt||'放大檢視的圖片';LB.classList.add('show');LB.focus();}});
+ LB.addEventListener('click',closeLB);}
 /* 鍵盤導覽：←/→ 翻頁、/ 聚焦搜尋、Esc 關閉 */
 document.addEventListener('keydown',function(e){
  var tag=(e.target&&e.target.tagName)||'';
  if(/^(INPUT|TEXTAREA|SELECT)$/.test(tag)){if(e.key==='Escape')e.target.blur();return;}
- if(e.key==='Escape'){if(LB&&LB.classList.contains('show')){LB.classList.remove('show');LBI.src='';return;}cm();var rp2=document.getElementById('rdpop');if(rp2)rp2.classList.remove('show');var sr2=document.getElementById('sres');if(sr2)sr2.classList.remove('show');}
+ if(e.key==='Escape'){if(LB&&LB.classList.contains('show')){closeLB();return;}if(typeof hideHB==='function')hideHB();cm();var rp2=document.getElementById('rdpop');if(rp2)rp2.classList.remove('show');var sr2=document.getElementById('sres');if(sr2)sr2.classList.remove('show');}
  else if(e.key==='/'){var sq2=document.getElementById('sq');if(sq2){e.preventDefault();sq2.focus();}}
  else if((e.key==='ArrowLeft'||e.key==='ArrowRight')&&MODE!=='scroll'){var cur=location.hash.slice(1),idx=O.indexOf(cur);if(idx<0)idx=0;var ni=e.key==='ArrowRight'?Math.min(O.length-1,idx+1):Math.max(0,idx-1);if(ni!==idx)show(O[ni]);}
 });
@@ -1800,14 +1807,14 @@ else{var ini=location.hash.slice(1);
 <title>${esc(brand)} — 閱讀台</title>
 <link rel="icon" href="${opts.favicon||"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='15' fill='%235fe3c7'/%3E%3Ctext x='32' y='45' font-size='38' text-anchor='middle' fill='%2306121a' font-family='serif' font-weight='700'%3E島%3C/text%3E%3C/svg%3E"}">
 ${opts.math?(opts.katexCSS?`<style>${opts.katexCSS}</style>`:'<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css" crossorigin="anonymous">'):''}
-<style>${css}</style></head><body><div class="bg"></div><div class="scrim" id="sc"></div><button id="totop" title="回頂端">↑</button><div id="lbox"><img alt=""></div>${opts.prog?'<div id="pbar"></div>':''}
+<style>${css}</style></head><body><a class="skip" href="#mainwrap">跳到主要內容</a><div class="bg"></div><div class="scrim" id="sc"></div><button id="totop" title="回頂端" aria-label="回到頂端">↑</button><div id="lbox" role="dialog" aria-modal="true" aria-label="圖片預覽" tabindex="-1"><img alt="放大檢視的圖片"></div>${opts.prog?'<div id="pbar" role="progressbar" aria-label="閱讀進度"></div>':''}
 <aside class="sidebar" id="sb"><div class="brand"><div class="brand-mark">${opts.logo?`<img class="brand-glyph brand-glyph-img" src="${opts.logo}" alt="logo"/>`:`<div class="brand-glyph">島</div>`}
 <div><div class="brand-name">${esc(brand)}</div><div class="brand-tag">${esc(tag)}</div></div></div></div>
 ${opts.search?'<div class="dsearch"><span class="si">⌕</span><input id="sq" type="search" placeholder="搜尋全部文件…" autocomplete="off"><div class="dresults" id="sres"></div></div>':''}
-<nav class="nav">${nav}</nav><div class="sidebar-foot"><span>md2deck</span><span>${new Date().toISOString().slice(0,10)}</span></div></aside>
+<nav class="nav" aria-label="文件導覽">${nav}</nav><div class="sidebar-foot"><span>md2deck</span><span>${new Date().toISOString().slice(0,10)}</span></div></aside>
 <main class="main"><div class="topbar"><div style="display:flex;align-items:center;gap:14px"><button class="tbtn menu-toggle" id="mt">☰</button>
 <span class="crumb"><b id="ct"></b></span></div><div style="display:flex;gap:8px"><div class="rdmenu"><button class="tbtn" id="rdbtn" title="閱讀設定（字級 / 行寬）" aria-label="閱讀設定">Aa 閱讀</button><div class="rdpop" id="rdpop"><div class="rdrow"><span>字級</span><span class="seg"><button data-fs="-1" aria-label="縮小字級">A−</button><button data-fs="0" aria-label="預設字級">預設</button><button data-fs="1" aria-label="放大字級">A+</button></span></div><div class="rdrow"><span>行寬</span><span class="seg"><button data-mw="narrow">窄</button><button data-mw="normal">標準</button><button data-mw="wide">寬</button></span></div></div></div><button class="tbtn" id="mode" title="切換淺色 / 深色" aria-label="切換淺色或深色">🌗 淺/深</button><button class="tbtn" id="pr" aria-label="列印或存 PDF">⎙ 列印 / 存 PDF</button></div></div>
-<div class="wrap">${sections}</div></main><script>${js}<\/script></body></html>`;
+<div class="wrap" id="mainwrap" tabindex="-1">${sections}</div></main><script>${js}<\/script></body></html>`;
 }
 
 /* -------- 預覽 / 下載 -------- */
