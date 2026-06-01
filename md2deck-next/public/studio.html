@@ -1313,6 +1313,7 @@ async function getKatexInlineCSS(){
 function DECK(t,nav,sections,ids,brand,tag,opts){
   opts=opts||{};
   const tk=t.tok;
+  const deckId=hashStr(String(brand||"")+"|"+ids.join(","));   // deck 專屬 ID，給 localStorage 狀態記憶用
   const tokenCSS=`
    .doc-body .hljs{color:var(--tx)}
    .doc-body .hljs-comment,.doc-body .hljs-quote{color:${tk.c};font-style:italic}
@@ -1418,6 +1419,11 @@ body{font-family:var(--sans);color:var(--tx);background:var(--ink);line-height:1
 .doc-body .chart-svg{width:100%;height:auto;display:block}
 .doc-body .chart-explicit{margin:22px 0}
 .doc-body .chart-cap{text-align:center;font-family:var(--serif);font-weight:700;font-size:15px;color:var(--tx);margin-bottom:6px}
+.doc-body .uhl{background:linear-gradient(transparent 55%,color-mix(in srgb,var(--ac1) 42%,transparent) 0);color:inherit;border-radius:2px;padding:0 1px;cursor:pointer}
+.doc-body .uhl.has-note{border-bottom:2px dotted var(--ac1)}
+.hlbar{position:absolute;z-index:60;display:flex;gap:2px;background:var(--code-bg);border:1px solid var(--line2);border-radius:11px;padding:4px;box-shadow:0 12px 34px rgba(0,0,0,.42)}
+.hlbar button{font-size:12.5px;padding:6px 11px;border:0;background:transparent;color:var(--tx);cursor:pointer;border-radius:8px;font-family:var(--sans);white-space:nowrap}
+.hlbar button:hover{background:color-mix(in srgb,var(--ac1) 18%,transparent)}
 .doc-body :not(pre)>code{font-family:var(--mono);font-size:.86em;padding:2px 7px;border-radius:6px;background:color-mix(in srgb,var(--tx) 10%,transparent);color:var(--em);border:1px solid var(--line)}
 .doc-body pre{margin:20px 0;border-radius:14px;border:1px solid var(--line2);overflow:hidden;background:var(--code-bg);box-shadow:0 14px 40px rgba(0,0,0,.3)}
 .doc-body pre::before{content:"";display:block;height:38px;border-bottom:1px solid var(--line);background-color:rgba(127,170,210,.05);background-image:radial-gradient(circle 5px at 20px 19px,#ff6f6f 99%,transparent),radial-gradient(circle 5px at 40px 19px,#ffcf5e 99%,transparent),radial-gradient(circle 5px at 60px 19px,#5fe3a0 99%,transparent);background-repeat:no-repeat}
@@ -1516,7 +1522,7 @@ ${tokenCSS}
 @media(max-width:1080px){.doc-grid{grid-template-columns:1fr}.doc-toc{display:none}}
 @media(max-width:860px){:root{--sb:280px}.sidebar{transform:translateX(-100%);transition:.3s;box-shadow:0 0 60px rgba(0,0,0,.6)}.sidebar.open{transform:none}.main{margin-left:0}.menu-toggle{display:block}.wrap{padding:30px 18px 100px}.topbar{padding:14px 16px}.doc-body,.doc-body p,.doc-body li{font-size:15.5px}.doc-body pre{max-width:100%}.doc-body :not(pre)>code{word-break:break-word}#pbar{left:0}.scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:25;opacity:0;pointer-events:none;transition:.3s}.scrim.show{opacity:1;pointer-events:auto}}
 @media print{.sidebar,.topbar,.doc-toc,.bg,.menu-toggle{display:none!important}.main{margin:0}.wrap{max-width:none;padding:0}.doc[hidden]{display:none}.doc-grid{grid-template-columns:1fr}}`;
-  const js=`const O=${JSON.stringify(ids)},MODE=${JSON.stringify(opts.layout||'sidebar')},TLIGHT=${t.light?1:0},sb=document.getElementById('sb'),sc=document.getElementById('sc');
+  const js=`const O=${JSON.stringify(ids)},MODE=${JSON.stringify(opts.layout||'sidebar')},TLIGHT=${t.light?1:0},DECKID=${JSON.stringify(deckId)},sb=document.getElementById('sb'),sc=document.getElementById('sc');
 function expandTo(id){var b=document.querySelector('.nav-item[data-doc="'+id+'"]');var p=b?b.closest('.nav-branch'):null;while(p){p.classList.add('open');var pa=p.parentElement;p=pa?pa.closest('.nav-branch'):null;}}
 function setActive(id){document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.doc===id));expandTo(id);var s=document.getElementById('doc-'+id);if(s)document.getElementById('ct').textContent=s.dataset.title;}
 function show(id){var s=document.getElementById('doc-'+id);if(!s)return;
@@ -1590,11 +1596,60 @@ document.addEventListener('keydown',function(e){
  else if(e.key==='/'){var sq2=document.getElementById('sq');if(sq2){e.preventDefault();sq2.focus();}}
  else if((e.key==='ArrowLeft'||e.key==='ArrowRight')&&MODE!=='scroll'){var cur=location.hash.slice(1),idx=O.indexOf(cur);if(idx<0)idx=0;var ni=e.key==='ArrowRight'?Math.min(O.length-1,idx+1):Math.max(0,idx-1);if(ni!==idx)show(O[ni]);}
 });
-if(MODE==='scroll'){document.querySelectorAll('.doc').forEach(d=>{d.hidden=false;d.classList.add('scrollsec');});setActive(O[0]);prog();}
+/* ===== 閱讀台狀態記憶：閱讀位置 + 螢光標記/筆記（全存 localStorage、零後端）===== */
+var PKEY='md2deck_pos_'+DECKID,HKEY='md2deck_hl_'+DECKID;
+function curDocId(){if(MODE==='scroll'){var c=O[0];document.querySelectorAll('.doc').forEach(function(s){if(s.getBoundingClientRect().top<160)c=s.id.slice(4);});return c;}return location.hash.slice(1)||O[0];}
+function savePos(){try{localStorage.setItem(PKEY,JSON.stringify({id:curDocId(),y:window.scrollY||0}));}catch(e){}}
+var _posT;window.addEventListener('scroll',function(){clearTimeout(_posT);_posT=setTimeout(savePos,450);},{passive:true});
+function getPos(){try{return JSON.parse(localStorage.getItem(PKEY)||'null');}catch(e){return null;}}
+function loadHL(){try{return JSON.parse(localStorage.getItem(HKEY)||'[]');}catch(e){return[];}}
+function saveHLArr(a){try{localStorage.setItem(HKEY,JSON.stringify(a));}catch(e){}}
+function occOf(body,range,text){var w=document.createTreeWalker(body,NodeFilter.SHOW_TEXT,null),seen=0,node;while(node=w.nextNode()){var hay=node.nodeValue,idx=hay.indexOf(text);while(idx>=0){if(node===range.startContainer&&idx===range.startOffset)return seen;seen++;idx=hay.indexOf(text,idx+text.length);}}return seen;}
+function wrapOcc(body,text,occ,note){var w=document.createTreeWalker(body,NodeFilter.SHOW_TEXT,null),seen=0,node;while(node=w.nextNode()){var hay=node.nodeValue,idx=hay.indexOf(text);while(idx>=0){if(seen===occ){var r=document.createRange();r.setStart(node,idx);r.setEnd(node,idx+text.length);var m=document.createElement('mark');m.className='uhl';m.setAttribute('data-occ',occ);if(note){m.setAttribute('data-note',note);m.title=note;m.classList.add('has-note');}try{r.surroundContents(m);}catch(e){return null;}return m;}seen++;idx=hay.indexOf(text,idx+text.length);}}return null;}
+(function applyAllHL(){loadHL().forEach(function(h){var doc=document.getElementById('doc-'+h.doc);if(!doc)return;var body=doc.querySelector('.doc-body');if(body)wrapOcc(body,h.text,h.occ,h.note);});})();
+var HB=document.createElement('div');HB.className='hlbar';HB.style.display='none';
+HB.innerHTML='<button type="button" data-a="hl">🖊 螢光</button><button type="button" data-a="note">📝 筆記</button><button type="button" data-a="del" style="display:none">🗑 移除</button>';
+document.body.appendChild(HB);
+var _ctx=null;
+function hideHB(){HB.style.display='none';_ctx=null;}
+function posHB(x,y){HB.style.display='flex';var w=HB.offsetWidth;HB.style.left=Math.max(8,Math.min(x-w/2,window.innerWidth+window.scrollX-w-8))+'px';HB.style.top=(y+8)+'px';}
+document.addEventListener('mouseup',function(e){
+ if(e.target.closest('.hlbar')||e.target.closest('.uhl'))return;
+ var sel=window.getSelection();if(!sel||sel.isCollapsed)return;
+ var text=sel.toString().replace(/\\s+$/,'').replace(/^\\s+/,'');if(!text||text.length<2||text.length>200)return;
+ var range=sel.getRangeAt(0);if(range.startContainer!==range.endContainer||range.startContainer.nodeType!==3)return;
+ var pe=range.startContainer.parentNode,body=pe&&pe.closest?pe.closest('.doc-body'):null;if(!body)return;
+ var docEl=body.closest('.doc');if(!docEl)return;
+ // 重新對齊 range 到實際選取文字的開頭
+ var off=range.startContainer.nodeValue.indexOf(text,Math.max(0,range.startOffset-1));if(off<0)off=range.startOffset;
+ var r2=document.createRange();r2.setStart(range.startContainer,off);r2.setEnd(range.startContainer,off+text.length);
+ _ctx={mode:'new',body:body,doc:docEl.id.slice(4),text:text,occ:occOf(body,r2,text)};
+ HB.querySelector('[data-a=del]').style.display='none';HB.querySelector('[data-a=hl]').style.display='';
+ posHB(e.pageX,e.pageY);
+});
+document.addEventListener('click',function(e){
+ var m=e.target.closest('.uhl');
+ if(!m){if(!e.target.closest('.hlbar'))hideHB();return;}
+ var dEl=m.closest('.doc');
+ _ctx={mode:'edit',mark:m,doc:dEl?dEl.id.slice(4):null,text:m.textContent,occ:+m.getAttribute('data-occ')};
+ HB.querySelector('[data-a=del]').style.display='';HB.querySelector('[data-a=hl]').style.display='none';
+ var r=m.getBoundingClientRect();posHB(r.left+r.width/2+window.scrollX,r.bottom+window.scrollY);
+});
+HB.addEventListener('click',function(e){
+ var b=e.target.closest('button');if(!b||!_ctx)return;var a=b.getAttribute('data-a'),arr=loadHL();
+ if(a==='hl'&&_ctx.mode==='new'){wrapOcc(_ctx.body,_ctx.text,_ctx.occ,'');arr.push({doc:_ctx.doc,text:_ctx.text,occ:_ctx.occ,note:''});saveHLArr(arr);var s=window.getSelection();if(s)s.removeAllRanges();}
+ else if(a==='note'){var prev=_ctx.mode==='edit'?(_ctx.mark.getAttribute('data-note')||''):'';var note=window.prompt('筆記內容：',prev);if(note!==null){
+   if(_ctx.mode==='new'){wrapOcc(_ctx.body,_ctx.text,_ctx.occ,note);arr.push({doc:_ctx.doc,text:_ctx.text,occ:_ctx.occ,note:note});var s2=window.getSelection();if(s2)s2.removeAllRanges();}
+   else{_ctx.mark.setAttribute('data-note',note);_ctx.mark.title=note;_ctx.mark.classList.toggle('has-note',!!note);arr.forEach(function(h){if(h.doc===_ctx.doc&&h.text===_ctx.text&&h.occ===_ctx.occ)h.note=note;});}
+   saveHLArr(arr);}}
+ else if(a==='del'&&_ctx.mode==='edit'){var m=_ctx.mark,tx=document.createTextNode(m.textContent),pa=m.parentNode;pa.replaceChild(tx,m);pa.normalize();arr=arr.filter(function(h){return !(h.doc===_ctx.doc&&h.text===_ctx.text&&h.occ===_ctx.occ);});saveHLArr(arr);}
+ hideHB();
+});
+if(MODE==='scroll'){document.querySelectorAll('.doc').forEach(d=>{d.hidden=false;d.classList.add('scrollsec');});setActive(O[0]);prog();var _sp=getPos();if(_sp&&_sp.y)setTimeout(function(){window.scrollTo(0,_sp.y);},80);}
 else{var ini=location.hash.slice(1);
  if(O.includes(ini)){show(ini);}
  else if(ini){var tgt=document.getElementById(ini),pd2=tgt&&tgt.closest('.doc');if(pd2){show(pd2.id.slice(4));setTimeout(function(){tgt.scrollIntoView();},80);}else show(O[0]);}
- else show(O[0]);}`;
+ else{var sp=getPos();if(sp&&O.includes(sp.id)){show(sp.id);if(sp.y)setTimeout(function(){window.scrollTo(0,sp.y);},70);}else show(O[0]);}}`;
   return `<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(brand)} — 閱讀台</title>
 <link rel="icon" href="${opts.favicon||"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='15' fill='%235fe3c7'/%3E%3Ctext x='32' y='45' font-size='38' text-anchor='middle' fill='%2306121a' font-family='serif' font-weight='700'%3E島%3C/text%3E%3C/svg%3E"}">

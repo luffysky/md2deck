@@ -46,7 +46,10 @@ section('語法檢查');
 })();
 
 /* ---------- 2. 純函式行為斷言 ---------- */
-global.document = new JSDOM('<!doctype html><body></body>').window.document;
+const _win = new JSDOM('<!doctype html><body></body>').window;
+global.document = _win.document;
+global.NodeFilter = _win.NodeFilter;   // runtime（瀏覽器）這些是全域，node 要手動掛上
+global.Node = _win.Node;
 let uid = 0;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const linkifyEsc = esc;
@@ -127,6 +130,26 @@ ok('解析出 1 個表格 2x2', tbls.length === 1 && tbls[0].length === 2 && tbl
 section('hashStr');
 ok('同字串同雜湊', hashStr('abc') === hashStr('abc'));
 ok('不同字串不同雜湊', hashStr('abc') !== hashStr('abd'));
+
+section('閱讀台螢光標記（runtime occOf / wrapOcc）');
+// 這兩個函式定義在 DECK runtime 模板字串內，挖出來配 jsdom 驗 DOM 行為
+eval(grab('occOf') + '\n' + grab('wrapOcc'));
+(function () {
+  const mk = () => { const d = document.createElement('div'); d.innerHTML = '<div class="doc-body"><p>ab cd ab cd ab</p></div>'; return d.querySelector('.doc-body'); };
+  const b1 = mk();
+  const m = wrapOcc(b1, 'ab', 1, '');
+  ok('wrapOcc 包住第 2 個 ab', !!m && m.textContent === 'ab' && b1.querySelectorAll('mark.uhl').length === 1);
+  ok('wrapOcc 帶筆記加 has-note', (function () { const b = mk(); const mm = wrapOcc(b, 'ab', 0, '我的筆記'); return mm.classList.contains('has-note') && mm.getAttribute('data-note') === '我的筆記'; })());
+  const b2 = mk();
+  const tn = b2.querySelector('p').firstChild;       // 文字節點 "ab cd ab cd ab"（ab 在 0/6/12）
+  const r = document.createRange(); r.setStart(tn, 12); r.setEnd(tn, 14);
+  ok('occOf 第 3 個 ab → 2', occOf(b2, r, 'ab') === 2);
+  // round-trip：occOf 算出的序號，wrapOcc 必須包到同一個位置
+  const b3 = mk(); const tn3 = b3.querySelector('p').firstChild;
+  const r3 = document.createRange(); r3.setStart(tn3, 6); r3.setEnd(tn3, 8);
+  const occ = occOf(b3, r3, 'ab'); const wm = wrapOcc(b3, 'ab', occ, '');
+  ok('occOf↔wrapOcc round-trip', occ === 1 && wm.previousSibling && /cd $/.test(wm.previousSibling.nodeValue));
+})();
 
 /* ---------- 結果 ---------- */
 console.log('\n' + (fails ? ('❌ ' + fails + ' 項失敗') : '✅ 全部通過'));
