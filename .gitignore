@@ -13,5 +13,9 @@ ex_nooutput/
 _mtest/
 _*.txt
 CLAUDE.md
-docs/
+# 注意：這裡是 `docs/*` 不是 `docs/`——帶斜線的話 git 不會走進那個目錄，
+# 下面那條 ! 例外就永遠不會生效（沒有錯誤訊息，只是安靜地沒作用）
+docs/*
+# 例外：升級建議要進版控，它是給之後接手的人看的
+!docs/upgrade.md
 bugpic/
