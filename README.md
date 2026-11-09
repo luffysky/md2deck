@@ -130,7 +130,7 @@ npm run start      # 啟動正式版
 ### 正式站：md2deck-next（推薦）
 
 1. 推上 GitHub。
-2. Zeabur → New Project → Deploy from GitHub → 選此 repo。Zeabur 由 `package.json` 自動辨識為 Next.js。
+2. Vercel → Import 此 repo，Root Directory 設為 `md2deck-next`，Framework 選 Next.js。
 3. 設定環境變數 `NEXT_PUBLIC_SITE_URL` 為你的正式網域，綁定 Domain。
 4. 之後每次 `git push` 自動重新部署。
 
